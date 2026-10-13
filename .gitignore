@@ -4,3 +4,9 @@ node_modules/
 .env
 .env.local
 zcode
+
+# Progress (aturan global: tidak di-commit)
+PROGRESS.md
+
+# Profil Chrome sementara dari test farm (dibersihkan test; jaga-jaga kalau crash)
+test/.tmp-*

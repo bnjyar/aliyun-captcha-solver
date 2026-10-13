@@ -33,6 +33,9 @@ npm install aliyun-captcha-solver
 opsional — Kalau sudah ada di app lo, resolve otomatis. Kalau tidak, set
 `PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json`.
 
+`undici` ikut terpasang otomatis, dipakai untuk jalur proxy (lihat di bawah). Butuh
+Node ≥ 20.18.1.
+
 ## Pakai
 
 ```js
@@ -69,6 +72,43 @@ const param = await pool.get(30_000); // captcha_verify_param, atau null
 Kalau cuma butuh param sekali tanpa browser, semua bisa lewat
 `captcha.computeCaptchaParam(deviceToken)` langsung.
 
+## Proxy keluar (opsional)
+
+Lo bisa kasih satu daftar proxy HTTP ke paket ini. Request yang dikirim paket, yaitu
+Init dan Verify Aliyun serta Chrome farm, lewat proxy aktif yang sama:
+
+```js
+import { createAliyunCaptcha, TokenFarm, loadProxyRouter } from 'aliyun-captcha-solver';
+
+const proxy = loadProxyRouter('/path/ke/proxies.txt', {
+  cooldownMs: 300_000,
+  rotateOn: null,            // (res, url) => alasan | null; string = pindah proxy
+  log: console.log,
+});
+
+const captcha = createAliyunCaptcha({ /* ... */, proxy });
+const farm = new TokenFarm({ /* ... */, proxy });
+```
+
+Format daftar, satu per baris (baris kosong dan `#` diabaikan):
+`host:port:user:pass` (ekspor Webshare), `user:pass@host:port`, atau `host:port`.
+Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
+
+- **Sticky.** Satu proxy dipakai sampai gagal. Lalu pindah ke proxy berikutnya, dan
+  yang gagal didinginkan selama `cooldownMs`. Init dan Verify harus keluar dari IP yang
+  sama, jadi tidak ada rotasi per request.
+- **Yang dihitung gagal:** proxy tidak bisa dihubungi (`ECONNREFUSED` dan sejenisnya),
+  CONNECT ditolak (407, 403, 5xx), atau Chrome melaporkan `ERR_PROXY_*` / `ERR_TUNNEL_*`.
+  Abort dari pemanggil dan error TLS setelah tunnel terbentuk tidak dihitung.
+- **`rotateOn(res, url)`** dipanggil untuk setiap respons dari `proxy.fetch`. Paket tidak
+  tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
+- **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
+  proxy di konteks yang sedang jalan. Device token yang sudah dipanen sebelum itu tetap
+  ada di pool.
+- **Tanpa `proxy`**, perilakunya sama seperti sebelumnya: koneksi langsung dan fetch global.
+- `proxy.fetch(url, init)` bisa dipakai pemanggil untuk request lain lewat proxy yang sama.
+  `proxy.status()` untuk diagnosis.
+
 ## Yang generalisasi, yang tidak
 
 | Komponen | Cakupan | Catatan |
@@ -76,6 +116,7 @@ Kalau cuma butuh param sekali tanpa browser, semua bisa lewat
 | Protokol RPC + signing HMAC-SHA1 | ✅ **Global** — seluruh Aliyun Captcha 2.0 cloud | Hanya hostname berubah, dan itu otomatis diturunkan dari `prefix` + `endpointRegion` |
 | Konstanta cipher (`argConstant`, `encryptKey`, perm-table) | ⚠️ **Per-SDK-build** | Terbukti lintas-scene dalam satu tenant. Tenant lain bisa punya build berbeda → verifikasi per tenant. Guard: `npm run test:solver` |
 | Device token (`z_um.getToken()`) | ⚠️ **Per-tenant-ish** | Butuh farm tab di origin situs target |
+| Jalur proxy keluar (`proxy`) | ✅ **Global** — sama untuk semua situs | Pilihan "status apa berarti diblokir" ada di pemanggil (`rotateOn`) |
 
 Yang **tidak** termasuk package ini: cara pemakaian param itu sendiri (header/body/
 apa pun milik aplikasi target). Itu di-reverse per situs, bukan generik.
@@ -111,9 +152,12 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test              # 29 test: cipher primitives, request shape, pool logic
+npm test              # 55 test: cipher & request shape (14), pool (15), proxy (24), farm lewat proxy (2)
 npm run test:solver   # canary rotasi konstanta Aliyun
 ```
+
+`test-farm-proxy.mjs` menjalankan Chrome sungguhan (`/usr/bin/google-chrome-stable`)
+melawan dua proxy lokal yang menjawab 502. Tidak ada trafik keluar.
 
 `test-solver.mjs` yang paling penting: kalau konstanta cipher FeiLin berubah,
 test inilah yang gagal duluan — sebelum request apa pun ditolak diam-diam.

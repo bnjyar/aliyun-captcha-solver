@@ -77,11 +77,11 @@ function uuid() {
   return crypto.randomUUID();
 }
 
-async function httpPost(url, body, extraHeaders = {}, timeoutMs = 15000) {
+async function httpPost(url, body, extraHeaders = {}, timeoutMs = 15000, send = fetch) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await send(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -209,6 +209,8 @@ export function aliHash(inputStr, saltStr) {
  * @param {string} [cfg.prefix]       Tenant prefix, e.g. 'no8xfe'
  * @param {object} [cfg.constants]    Override cipher constants (last resort)
  * @param {number} [cfg.timeoutMs]    Per-HTTP-request timeout
+ * @param {object} [cfg.proxy]        ProxyRouter from ./proxy.mjs. Init and Verify leave through its
+ *                                    active proxy. Without it, global fetch is used.
  */
 export function createAliyunCaptcha(cfg) {
   const {
@@ -220,6 +222,7 @@ export function createAliyunCaptcha(cfg) {
     endpointRegion = region,
     constants = {},
     timeoutMs = 15000,
+    proxy = null,
   } = cfg || {};
 
   if (!accessKey) throw new Error('createAliyunCaptcha: accessKey is required');
@@ -232,6 +235,7 @@ export function createAliyunCaptcha(cfg) {
 
   const initUrl = `https://${prefix}.captcha-open-${endpointRegion}.aliyuncs.com/`;
   const verifyUrl = `https://${prefix}-verify.captcha-open-${endpointRegion}.aliyuncs.com/`;
+  const send = (url, init) => (proxy ? proxy.fetch(url, init) : fetch(url, init));
 
   const arg = (certifyId) =>
     ksaAndPrga(Buffer.from(certifyId, 'utf-8'), argConstant).toString('base64');
@@ -254,7 +258,7 @@ export function createAliyunCaptcha(cfg) {
       Version: '2023-03-05',
     };
     params.Signature = aliyunSignature(params, secretKey);
-    const resp = await httpPost(initUrl, buildQueryString(params), {}, timeoutMs);
+    const resp = await httpPost(initUrl, buildQueryString(params), {}, timeoutMs, send);
     const data = JSON.parse(resp);
     if (!data.CertifyId) {
       throw new Error(`InitCaptchaV3 failed: ${resp.slice(0, 400)}`);
@@ -283,7 +287,7 @@ export function createAliyunCaptcha(cfg) {
       SignatureNonce: uuid(),
     };
     params.Signature = aliyunSignature(params, secretKey);
-    const resp = await httpPost(verifyUrl, buildQueryString(params), { Referer: '' }, timeoutMs);
+    const resp = await httpPost(verifyUrl, buildQueryString(params), { Referer: '' }, timeoutMs, send);
     let data;
     try {
       data = JSON.parse(resp);

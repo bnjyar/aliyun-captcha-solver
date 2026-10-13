@@ -4,20 +4,23 @@
   "description": "Browserless Aliyun Captcha 2.0 param generator (FeiLin). Platform-agnostic; one device-token farm per site.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=20.18.1" },
   "main": "./src/index.mjs",
   "exports": {
     ".": "./src/index.mjs",
     "./aliyun-captcha": "./src/aliyun-captcha.mjs",
     "./captcha-pool": "./src/captcha-pool.mjs",
     "./token-farm": "./src/token-farm.mjs",
+    "./proxy": "./src/proxy.mjs",
     "./package.json": "./package.json"
   },
   "files": ["src", "README.md"],
   "scripts": {
-    "test": "node test/test-solver.mjs && node test/test-pool.mjs",
+    "test": "node test/test-solver.mjs && node test/test-pool.mjs && node test/test-proxy.mjs && node test/test-farm-proxy.mjs",
     "test:solver": "node test/test-solver.mjs",
-    "test:pool": "node test/test-pool.mjs"
+    "test:pool": "node test/test-pool.mjs",
+    "test:proxy": "node test/test-proxy.mjs",
+    "test:farm-proxy": "node test/test-farm-proxy.mjs"
   },
   "peerDependencies": {
     "playwright-core": ">=1.40"
@@ -26,5 +29,11 @@
     "playwright-core": { "optional": true }
   },
   "keywords": ["aliyun", "captcha", "feilin", "captcha-open", "anti-bot"],
-  "sideEffects": false
+  "sideEffects": false,
+  "dependencies": {
+    "undici": "^7.30.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.0"
+  }
 }

@@ -14,6 +14,7 @@
 
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { chromeProxyFailureReason } from './proxy.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -97,6 +98,9 @@ export class TokenFarm {
    * @param {string}  [opts.inputSelector]   defaults to opts.waitSelector
    * @param {boolean} [opts.verbose]
    * @param {boolean} [opts.headless]
+   * @param {object}  [opts.proxy]     ProxyRouter from ./proxy.mjs. Chrome leaves through the active
+   *                                   proxy, relaunches when the router moves on, and reports
+   *                                   Chrome-side proxy errors back to the router.
    */
   constructor({
     url,
@@ -109,6 +113,7 @@ export class TokenFarm {
     inputSelector = null,
     verbose = false,
     headless = true,
+    proxy = null,
   } = {}) {
     if (!url) throw new Error('TokenFarm requires url');
     if (!prefix) throw new Error('TokenFarm requires prefix');
@@ -122,6 +127,8 @@ export class TokenFarm {
     this.inputSelector = inputSelector || waitSelector;
     this.verbose = verbose;
     this.headless = headless;
+    this.proxy = proxy;
+    this.launchedProxy = null; // router entry the running Chrome was launched with
     this.context = null;
     this.page = null;
     this.warmed = false;
@@ -143,6 +150,12 @@ export class TokenFarm {
       locale: 'en-US',
       args: ['--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage', '--no-sandbox'],
     };
+    if (this.proxy) {
+      // Chrome cannot switch proxies on a live context, so the choice is made here.
+      this.launchedProxy = this.proxy.current();
+      launchOpts.proxy = this.launchedProxy.playwrightProxy;
+      this.log(`chrome egress via proxy #${this.launchedProxy.index}`);
+    }
     this.context = this.profile
       ? await chromium.launchPersistentContext(this.profile, launchOpts)
       : await chromium.launch(launchOpts);
@@ -150,10 +163,23 @@ export class TokenFarm {
     await this.warm();
   }
 
+  // ERR_PROXY_* and ERR_TUNNEL_* mean the proxy itself failed (unreachable, or
+  // CONNECT refused). Report it, so the router moves on and the next harvest relaunches.
+  reportProxyError(e) {
+    if (!this.proxy || !this.launchedProxy) return;
+    const reason = chromeProxyFailureReason(e?.message);
+    if (reason) this.proxy.fail(this.launchedProxy, reason);
+  }
+
   async warm() {
     const page = this.page;
     this.log('opening', this.url);
-    await page.goto(this.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try {
+      await page.goto(this.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    } catch (e) {
+      this.reportProxyError(e);
+      throw e;
+    }
     if (this.waitSelector) {
       try {
         await page.waitForSelector(this.waitSelector, { timeout: 30000 });
@@ -226,6 +252,12 @@ export class TokenFarm {
   }
 
   async harvest(count = 25) {
+    // The router moved on (a failed Verify or Chrome load). Relaunch so the tab
+    // leaves from the same IP as the rest of the solver.
+    if (this.context && this.proxy && this.proxy.current() !== this.launchedProxy) {
+      this.log('active proxy changed, relaunching farm');
+      await this.restart();
+    }
     if (!this.warmed && !(await this.isWarm())) {
       await this.warm();
     }
