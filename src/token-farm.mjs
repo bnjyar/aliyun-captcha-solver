@@ -13,6 +13,7 @@
 // enough if the site is unreachable.
 
 import { createRequire } from 'node:module';
+import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 
@@ -22,13 +23,57 @@ const SDK_URL = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptc
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Resolve a playwright-core candidate to its `chromium` launcher.
+ *
+ * The candidate may be a bare module name ("playwright-core"), a path to its
+ * package.json, or a path to the entry file — the README advertises the
+ * package.json form, which require() resolves to *metadata*, not a module, so
+ * we follow `main` ourselves instead of handing back an object with no
+ * `.chromium` on it.
+ */
+function chromiumFrom(candidate) {
+  let mod = require(candidate);
+  for (let hop = 0; hop < 3; hop++) {
+    if (!mod || typeof mod !== 'object') break;
+    if (mod.chromium) return mod.chromium;
+    // ESM-transpiled default export, or package.json metadata: one hop down.
+    if (mod.default && typeof mod.default === 'object' && !mod.main) {
+      mod = mod.default;
+      continue;
+    }
+    if (typeof mod.main === 'string') {
+      const dir = candidate.startsWith('/') || candidate.includes('/')
+        ? path.dirname(path.resolve(candidate))
+        : null;
+      if (!dir) break;
+      mod = require(path.join(dir, mod.main));
+      continue;
+    }
+    // Modern packages (playwright-core >= 1.30) have no `main`, only an
+    // `exports` map. Follow its CJS/ESM entry by hand.
+    const entry = mod.exports && typeof mod.exports === 'object' && mod.exports['.'];
+    if (entry) {
+      const dir = candidate.startsWith('/') || candidate.includes('/')
+        ? path.dirname(path.resolve(candidate))
+        : null;
+      if (!dir) break;
+      const rel = typeof entry === 'string' ? entry : entry.require || entry.default || entry.import;
+      mod = require(path.join(dir, rel));
+      continue;
+    }
+    break;
+  }
+  throw new Error(`resolved but no .chromium export (keys: ${Object.keys(mod || {}).slice(0, 8)})`);
+}
+
 /** Resolve playwright-core from the host app (optional peer dependency). */
 function loadChromium() {
   const candidates = [process.env.PLAYWRIGHT_CORE_PATH, 'playwright-core'].filter(Boolean);
   const errors = [];
   for (const c of candidates) {
     try {
-      return require(c).chromium;
+      return chromiumFrom(c);
     } catch (e) {
       errors.push(`${c}: ${e.message}`);
     }

@@ -13,14 +13,29 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let passed = 0;
+// Async cases run SEQUENTIALLY after the sync ones, never concurrently: they
+// stub globalThis.fetch, and two overlapping stubs make one restore the real
+// fetch while the other is still mid-request (which silently turns a unit test
+// into a live API call).
+const queue = [];
+const pass = (name) => {
+  passed++;
+  console.log(`  ✓ ${name}`);
+};
+const fail = (name, e) => {
+  console.error(`  ✗ ${name}: ${e.message}`);
+  process.exitCode = 1;
+};
 const t = (name, fn) => {
+  if (fn.constructor.name === 'AsyncFunction') {
+    queue.push([name, fn]);
+    return;
+  }
   try {
     fn();
-    passed++;
-    console.log(`  ✓ ${name}`);
+    pass(name);
   } catch (e) {
-    console.error(`  ✗ ${name}: ${e.message}`);
-    process.exitCode = 1;
+    fail(name, e);
   }
 };
 
@@ -54,6 +69,56 @@ t('aliHash is deterministic & salt-sensitive', () => {
 t('generateArg is idempotent per certifyId', () => {
   assert.equal(generateArg('abc123'), generateArg('abc123'));
   assert.notEqual(generateArg('abc123'), generateArg('abc124'));
+});
+
+console.log('\nrequest shape (regression, silent-400 class):');
+
+t('Timestamp is second-precision ISO-8601', async () => {
+  // Regression: an earlier port stripped only the millisecond DIGITS, leaving
+  // "2026-10-13T12:23:19.Z". Aliyun answers that with
+  // {"Message":"Timestamp is illegal!","Code":400} on EVERY call — including
+  // verifies — and the signature is never even evaluated, so nothing about the
+  // failure points at the timestamp. Pin the wire format instead.
+  const realFetch = globalThis.fetch;
+  let body = '';
+  globalThis.fetch = async (_url, opts) => {
+    body = opts.body;
+    return {
+      text: async () => JSON.stringify({ CertifyId: 'TESTCERTIFY', CaptchaType: 'TRACELESS' }),
+    };
+  };
+  try {
+    const c = createAliyunCaptcha({
+      accessKey: 'AK',
+      secretKey: 'SK',
+      sceneId: 'scene1',
+      prefix: 'no8xfe',
+    });
+    await c.initCaptchaRaw();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const ts = decodeURIComponent(new URLSearchParams(body).get('Timestamp'));
+  assert.match(ts, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/, `got "${ts}"`);
+});
+
+t('initCaptcha stays a thin wrapper over initCaptchaRaw', async () => {
+  // Existing callers (captcha-pool, anything importing the client) expect a
+  // bare CertifyId string — the raw-response helper must not change that.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ text: async () => JSON.stringify({ CertifyId: 'ABC123' }) });
+  try {
+    const c = createAliyunCaptcha({
+      accessKey: 'AK',
+      secretKey: 'SK',
+      sceneId: 'scene1',
+      prefix: 'no8xfe',
+    });
+    assert.equal(await c.initCaptcha(), 'ABC123');
+    assert.deepEqual(await c.initCaptchaRaw(), { CertifyId: 'ABC123' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 console.log('\ntenant client config:');
@@ -110,4 +175,12 @@ t('no tenant credentials are hardcoded', () => {
   assert.ok(!/didk33e0|11xygtvd/.test(src), 'no hardcoded Z.ai scene ids');
 });
 
+for (const [name, fn] of queue) {
+  try {
+    await fn();
+    pass(name);
+  } catch (e) {
+    fail(name, e);
+  }
+}
 console.log(`\n${passed} passed`);

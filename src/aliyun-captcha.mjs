@@ -65,8 +65,12 @@ function buildQueryString(params) {
   return keys.map((k) => `${urlEncode(k)}=${urlEncode(params[k])}`).join('&');
 }
 
+// Aliyun wants ISO-8601 to the second: 2026-10-13T12:23:19Z.
+// The "." before the milliseconds MUST be part of the match — stripping only
+// the digits leaves "2026-10-13T12:23:19.Z", which the service rejects with
+// `Timestamp is illegal!` / Code 400 (signature never even evaluated).
 function utcTimestamp() {
-  return new Date().toISOString().replace(/\d{3}Z$/, 'Z');
+  return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function uuid() {
@@ -234,7 +238,7 @@ export function createAliyunCaptcha(cfg) {
   const enc = (plaintext) =>
     ksaAndPrga(Buffer.from(plaintext, 'utf-8'), encryptKey).toString('base64');
 
-  async function initCaptcha() {
+  async function initCaptchaRaw() {
     const params = {
       AccessKeyId: accessKey,
       Action: 'InitCaptchaV3',
@@ -255,7 +259,11 @@ export function createAliyunCaptcha(cfg) {
     if (!data.CertifyId) {
       throw new Error(`InitCaptchaV3 failed: ${resp.slice(0, 400)}`);
     }
-    return data.CertifyId;
+    return data;
+  }
+
+  async function initCaptcha() {
+    return (await initCaptchaRaw()).CertifyId;
   }
 
   async function verifyCaptcha(certifyId, dataValue, deviceToken) {
@@ -348,6 +356,7 @@ export function createAliyunCaptcha(cfg) {
     initUrl,
     verifyUrl,
     initCaptcha,
+    initCaptchaRaw,
     verifyCaptcha,
     computeCaptchaParam,
   };
