@@ -1,0 +1,30 @@
+{
+  "name": "aliyun-captcha-solver",
+  "version": "0.1.0",
+  "description": "Browserless Aliyun Captcha 2.0 param generator (FeiLin). Platform-agnostic; one device-token farm per site.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./aliyun-captcha": "./src/aliyun-captcha.mjs",
+    "./captcha-pool": "./src/captcha-pool.mjs",
+    "./token-farm": "./src/token-farm.mjs",
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "README.md"],
+  "scripts": {
+    "test": "node test/test-solver.mjs && node test/test-pool.mjs",
+    "test:solver": "node test/test-solver.mjs",
+    "test:pool": "node test/test-pool.mjs"
+  },
+  "peerDependencies": {
+    "playwright-core": ">=1.40"
+  },
+  "peerDependenciesMeta": {
+    "playwright-core": { "optional": true }
+  },
+  "keywords": ["aliyun", "captcha", "feilin", "captcha-open", "anti-bot"],
+  "sideEffects": false
+}
