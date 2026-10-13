@@ -1,8 +1,8 @@
 // captcha-pool.mjs — device-token pool + paced background param generator.
 //
 // Keeps fresh captcha_verify_param payloads warm (TTL 75s) and paces Aliyun
-// VerifyCaptchaV3 calls (min 10s apart; F001 -> 300s pause; F011 -> 60s pause)
-// so the device/risk engine never flags us.
+// VerifyCaptchaV3 calls (one at a time, min 10s apart; F001 -> 300s pause;
+// F011 -> 60s pause) so the device/risk engine never flags us.
 //
 // The pool is platform-agnostic: it talks to any object exposing
 // computeCaptchaParam(deviceToken) -> Promise<string> (see
@@ -38,7 +38,8 @@ export class CaptchaPool {
     this.params = []; // { createdAt, value }
     this.deviceTokens = deviceTokens.map((t) => ({ addedAt: Date.now(), token: t }));
     this.consumed = new Set();
-    this.generating = false;
+    this.inflight = null; // the single VerifyCaptchaV3 allowed in flight
+    this.lastError = null; // { code, message, captchaType, at } of the last failed mint
     this.lastGen = 0;
     this.lastActive = Date.now();
     this.f001Until = 0;
@@ -125,45 +126,52 @@ export class CaptchaPool {
         this.log('serving warm param');
         return p.value;
       }
-      // synchronous one-shot if possible (paced)
-      const v = await this.tryGenerateOnce();
-      if (v) return v;
-      await new Promise((r) => setTimeout(r, 250));
+      // Join the mint already running (its param lands in this.params), or
+      // start one if pacing allows. Never a second Verify beside a live one.
+      if (this.inflight) await this.inflight;
+      else if (this.mayMint()) await this.startMint();
+      if (!this.params.length) await new Promise((r) => setTimeout(r, 250));
     }
     return null;
   }
 
   shouldGenerate() {
-    const now = Date.now();
-    const idle = now - this.lastActive > this.t.IDLE_PAUSE_MS;
+    const idle = Date.now() - this.lastActive > this.t.IDLE_PAUSE_MS;
     if (idle && !this.params.length) return false;
-    const needed = this.t.MAX_PARAMS - this.params.length - (this.generating ? 1 : 0);
-    if (needed <= 0) return false;
+    if (this.params.length >= this.t.MAX_PARAMS) return false;
+    return this.mayMint();
+  }
+
+  // Pacing gate shared by the background tick and get(): one Verify at a time,
+  // at least MIN_GEN_INTERVAL_MS after the previous one started, and never
+  // during a risk-control pause.
+  mayMint() {
+    const now = Date.now();
+    if (this.inflight) return false;
     if (now - this.lastGen < this.t.MIN_GEN_INTERVAL_MS) return false;
     if (now < this.failBackoffUntil || now < this.f001Until || now < this.f011Until) return false;
     return true;
   }
 
-  async tick() {
+  tick() {
     const now = Date.now();
     this.params = this.params.filter((p) => now - p.createdAt < this.t.PARAM_TTL_MS);
-    if (!this.shouldGenerate()) return;
-    this.generating = true;
-    this.lastGen = Date.now();
-    try {
-      const v = await this.generateOne();
-      if (v) this.params.push({ createdAt: Date.now(), value: v });
-    } finally {
-      this.generating = false;
-    }
+    if (this.shouldGenerate()) this.startMint();
   }
 
-  async tryGenerateOnce() {
-    const now = Date.now();
-    if (now - this.lastGen < this.t.MIN_GEN_INTERVAL_MS) return null;
-    if (now < this.failBackoffUntil || now < this.f001Until || now < this.f011Until) return null;
-    this.lastGen = now;
-    return this.generateOne();
+  // The only place a Verify is started. Single-flight: a caller that finds a
+  // mint already running waits for it rather than racing a second Verify.
+  startMint() {
+    this.lastGen = Date.now();
+    this.inflight = this.generateOne()
+      .then((value) => {
+        if (value) this.params.push({ createdAt: Date.now(), value });
+      })
+      .catch((e) => this.log('mint crashed:', e.message))
+      .finally(() => {
+        this.inflight = null;
+      });
+    return this.inflight;
   }
 
   async generateOne() {
@@ -183,6 +191,12 @@ export class CaptchaPool {
       return value;
     } catch (e) {
       const code = e.verifyCode;
+      this.lastError = {
+        code: code || 'ERROR',
+        message: (e.message || '').slice(0, 200),
+        captchaType: e.captchaType || null,
+        at: Date.now(),
+      };
       if (code === 'F001') {
         this.f001Until = Date.now() + this.t.F001_PAUSE_MS;
         this.log('F001 risk-control — pausing verifies 300s');
@@ -202,14 +216,20 @@ export class CaptchaPool {
 
   stats() {
     const now = Date.now();
+    const le = this.lastError;
     return {
       warmParams: this.params.filter((p) => now - p.createdAt < this.t.PARAM_TTL_MS).length,
       deviceTokens: this.deviceTokens.length,
+      minting: this.inflight !== null,
       paused: {
         f001: this.f001Until > now ? Math.ceil((this.f001Until - now) / 1000) : 0,
         f011: this.f011Until > now ? Math.ceil((this.f011Until - now) / 1000) : 0,
         backoff: this.failBackoffUntil > now ? Math.ceil((this.failBackoffUntil - now) / 1000) : 0,
       },
+      // Kept after recovery on purpose: ageSec says how stale it is.
+      lastError: le
+        ? { code: le.code, message: le.message, captchaType: le.captchaType, ageSec: Math.round((now - le.at) / 1000) }
+        : null,
     };
   }
 }

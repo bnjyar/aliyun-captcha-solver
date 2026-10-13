@@ -113,4 +113,41 @@ await t('expired warm params are evicted', async () => {
   p.stop();
 });
 
+await t('never runs two verifies at once', async () => {
+  // Regression: get() and the background tick each started a Verify, so a
+  // slow mint could overlap a second one — the burst pattern F011 punishes.
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let calls = 0;
+  const captcha = {
+    async computeCaptchaParam() {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 40));
+      inFlight--;
+      return 'P' + ++calls;
+    },
+  };
+  const p = new CaptchaPool({ captcha, deviceTokens: ['a', 'b', 'c'], timing: noWait });
+  const vals = await Promise.all([p.get(2000), p.get(2000), p.get(2000)]);
+  assert.deepEqual(vals, ['P1', 'P2', 'P3']);
+  assert.equal(maxInFlight, 1);
+  p.stop();
+});
+
+await t('last failed mint keeps its Aliyun code and CaptchaType', async () => {
+  const err = new Error('VerifyCaptchaV3 rejected (code=F011): {"Success":true}');
+  err.verifyCode = 'F011';
+  err.captchaType = 'TRACELESS';
+  const p = new CaptchaPool({ captcha: fake({ failWith: err }), deviceTokens: ['t'], timing: noWait });
+  assert.equal(p.stats().lastError, null);
+  await p.get(200);
+  const le = p.stats().lastError;
+  assert.equal(le.code, 'F011');
+  assert.equal(le.captchaType, 'TRACELESS');
+  assert.match(le.message, /code=F011/);
+  assert.ok(le.ageSec >= 0);
+  p.stop();
+});
+
 console.log(`\n${passed} passed`);

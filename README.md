@@ -96,10 +96,21 @@ Nilai default di `CaptchaPool`, bisa di-override lewat `timing`:
 `F001` juga set `pool.farmNeedsRestart = true` — sinyal ke pemilik farm untuk
 bangun ulang tab (device context yang kena-flag, bukan sekadar pacing).
 
+Verify tidak pernah berjalan bersamaan: hanya satu mint in-flight, baik dari
+background tick maupun dari `get()` (single-flight). Caller yang menemukan mint
+sedang jalan ikut menunggu hasilnya, tidak memulai Verify kedua.
+
+### Diagnosis: `pool.stats().lastError`
+
+Kegagalan mint terakhir: `code` (kode Aliyun seperti `F011`, atau `ERROR` untuk
+kegagalan lain), `message` (potongan respons Aliyun), `captchaType` (tantangan
+yang diterbitkan Init — `TRACELESS` = tanpa slider), dan `ageSec`. Field ini
+tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
+
 ## Test
 
 ```bash
-npm test              # 20 test: cipher primitives + pool logic
+npm test              # 26 test: cipher primitives, request shape, pool logic
 npm run test:solver   # canary rotasi konstanta Aliyun
 ```
 

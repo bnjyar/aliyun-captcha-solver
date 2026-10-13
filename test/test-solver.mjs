@@ -121,6 +121,51 @@ t('initCaptcha stays a thin wrapper over initCaptchaRaw', async () => {
   }
 });
 
+t('computeCaptchaParam returns the final param on success', async () => {
+  const realFetch = globalThis.fetch;
+  const replies = [
+    JSON.stringify({ CertifyId: 'CERT2', CaptchaType: 'TRACELESS' }),
+    JSON.stringify({ Success: true, Result: { VerifyResult: true, certifyId: 'CERT2', securityToken: 'SEC' } }),
+  ];
+  globalThis.fetch = async () => ({ text: async () => replies.shift() });
+  let param;
+  try {
+    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'no8xfe' });
+    param = await c.computeCaptchaParam('DEVTOKEN');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(JSON.parse(Buffer.from(param, 'base64').toString('utf8')), {
+    certifyId: 'CERT2',
+    isSign: true,
+    sceneId: 'scene1',
+    securityToken: 'SEC',
+  });
+});
+
+t('verify rejection carries the Init CaptchaType', async () => {
+  // Diagnostic: an F011 alone does not say whether Aliyun issued a slider
+  // (INPAINTING) or TRACELESS at Init, so the rejection must carry both.
+  const realFetch = globalThis.fetch;
+  const replies = [
+    JSON.stringify({ CertifyId: 'CERT3', CaptchaType: 'INPAINTING' }),
+    JSON.stringify({ Success: true, Result: { VerifyResult: false, VerifyCode: 'F011' } }),
+  ];
+  globalThis.fetch = async () => ({ text: async () => replies.shift() });
+  let err;
+  try {
+    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'no8xfe' });
+    await c.computeCaptchaParam('DEVTOKEN');
+  } catch (e) {
+    err = e;
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(err, 'verify should be rejected');
+  assert.equal(err.verifyCode, 'F011');
+  assert.equal(err.captchaType, 'INPAINTING');
+});
+
 console.log('\ntenant client config:');
 
 t('client derives endpoints from prefix + region', () => {

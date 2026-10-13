@@ -316,7 +316,8 @@ export function createAliyunCaptcha(cfg) {
 
   /** Full mint: Init -> arg -> track -> Verify. Returns captcha_verify_param. */
   async function computeCaptchaParam(deviceToken) {
-    const certifyId = await initCaptcha();
+    const init = await initCaptchaRaw();
+    const certifyId = init.CertifyId;
     const argValue = arg(certifyId);
     const ct = Date.now();
 
@@ -343,7 +344,15 @@ export function createAliyunCaptcha(cfg) {
     const fb64 = compressed.toString('base64');
     const finalVal = enc(fb64);
 
-    return verifyCaptcha(certifyId, finalVal, deviceToken);
+    try {
+      return await verifyCaptcha(certifyId, finalVal, deviceToken);
+    } catch (e) {
+      // CaptchaType is the challenge Aliyun issued to this device at Init
+      // (TRACELESS = no slider). Carry it on the error so a rejection shows
+      // what we were up against, not only the code.
+      e.captchaType = init.CaptchaType;
+      throw e;
+    }
   }
 
   return {
