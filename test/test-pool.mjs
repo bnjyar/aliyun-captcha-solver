@@ -150,4 +150,39 @@ await t('last failed mint keeps its Aliyun code and CaptchaType', async () => {
   p.stop();
 });
 
+await t('idle pool parks even while a warm param is still alive', () => {
+  // Regression: `idle && !params.length` let an idle pool keep refilling as its
+  // last live param expired (~96 Verifies/hour with zero requests).
+  const c = fake();
+  const p = new CaptchaPool({ captcha: c, deviceTokens: ['a', 'b'], timing: { ...noWait, PARAM_TTL_MS: 10_000, IDLE_PAUSE_MS: 50 } });
+  p.params.push({ createdAt: Date.now(), value: 'LIVE' });
+  p.lastActive = Date.now() - 1000;
+  assert.equal(p.shouldGenerate(), false);
+  p.tick();
+  assert.equal(c.calls, 0);
+  p.stop();
+});
+
+await t('active pool still refills toward MAX_PARAMS', () => {
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: ['a'], timing: { ...noWait, MAX_PARAMS: 2, IDLE_PAUSE_MS: 60_000 } });
+  assert.equal(p.shouldGenerate(), true);
+  p.params.push({ createdAt: Date.now(), value: 'LIVE' });
+  assert.equal(p.shouldGenerate(), true);
+  p.params.push({ createdAt: Date.now(), value: 'LIVE2' });
+  assert.equal(p.shouldGenerate(), false);
+  p.stop();
+});
+
+await t('on-demand (MAX_PARAMS 0) mints only when get() asks', async () => {
+  const c = fake();
+  const p = new CaptchaPool({ captcha: c, deviceTokens: ['a', 'b'], timing: { ...noWait, MAX_PARAMS: 0 } });
+  p.start(); // the tick runs, but must not mint
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(c.calls, 0);
+  assert.equal(await p.get(1000), 'PARAM1');
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(c.calls, 1); // nothing minted behind the request
+  p.stop();
+});
+
 console.log(`\n${passed} passed`);

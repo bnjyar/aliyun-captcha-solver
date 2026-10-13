@@ -12,7 +12,7 @@
 // tab whose window.z_um.getToken() yields one-time tokens.
 
 const PARAM_TTL_MS = 75_000; // param payload usable window (prior-art measured)
-const MAX_PARAMS = 2; // warm payloads kept
+const MAX_PARAMS = 2; // warm payloads kept (0 = on-demand: mint only inside get())
 const MIN_GEN_INTERVAL_MS = 10_000; // pacing between Verify calls
 const F001_PAUSE_MS = 300_000; // risk-control flag cooldown (~5 min)
 const F011_PAUSE_MS = 60_000; // frequency/desync cooldown
@@ -136,8 +136,9 @@ export class CaptchaPool {
   }
 
   shouldGenerate() {
-    const idle = Date.now() - this.lastActive > this.t.IDLE_PAUSE_MS;
-    if (idle && !this.params.length) return false;
+    // Idle parks generation outright. The old `idle && !params.length` let a
+    // pool with one live param refill forever (~96 Verifies/hour, no demand).
+    if (Date.now() - this.lastActive > this.t.IDLE_PAUSE_MS) return false;
     if (this.params.length >= this.t.MAX_PARAMS) return false;
     return this.mayMint();
   }

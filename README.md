@@ -87,7 +87,8 @@ Nilai default di `CaptchaPool`, bisa di-override lewat `timing`:
 | Konstanta | Default | Arti |
 |---|---|---|
 | `PARAM_TTL_MS` | 75s | masa pakai param |
-| `MAX_PARAMS` | 2 | jumlah param warm |
+| `MAX_PARAMS` | 2 | jumlah param warm. `0` = on-demand: Verify hanya jalan di dalam `get()`, tanpa mint di latar belakang |
+| `IDLE_PAUSE_MS` | 180s | tanpa `get()` selama ini, pool berhenti mint total, termasuk refill param yang masih hidup |
 | `MIN_GEN_INTERVAL_MS` | 10s | jarak minimum antar Verify |
 | `F001_PAUSE_MS` | 300s | cooldown risk-control |
 | `F011_PAUSE_MS` | 60s | cooldown frequency/desync |
@@ -110,7 +111,7 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test              # 26 test: cipher primitives, request shape, pool logic
+npm test              # 29 test: cipher primitives, request shape, pool logic
 npm run test:solver   # canary rotasi konstanta Aliyun
 ```
 
