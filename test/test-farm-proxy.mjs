@@ -1,6 +1,6 @@
-// test-farm-proxy.mjs — the farm's Chrome leaves through the proxy router.
-// Uses the real Chrome (executablePath default) against two local recorder
-// proxies. They answer CONNECT with 502, so nothing reaches the internet.
+// test-farm-proxy.mjs — the farm's Chrome leaves through the proxy router, and
+// proxy-level failures move it on. Real Chrome (executablePath default) against
+// local proxies only; nothing reaches the internet.
 // Run: node test/test-farm-proxy.mjs   (needs /usr/bin/google-chrome-stable)
 
 import assert from 'node:assert';
@@ -20,19 +20,32 @@ const closeServer = (server) => {
   server.closeAllConnections?.();
   return new Promise((resolve) => server.close(resolve));
 };
+async function deadPort() {
+  const s = net.createServer();
+  const port = await listen(s);
+  await closeServer(s);
+  return port;
+}
 
-// Records every CONNECT. Wrong auth gets 407; right auth gets 502 (no upstream).
+// Records every request. Missing or wrong auth gets 407. Right auth gets the
+// socket closed, so Chrome shows ERR_EMPTY_RESPONSE: a page error, not a proxy failure.
 function makeRecorder(user, pass) {
   const hits = [];
-  const server = http.createServer((req, res) => res.end());
-  server.on('connect', (req, sock) => {
-    hits.push({ target: req.url, auth: req.headers['proxy-authorization'] ?? null });
-    sock.on('error', () => {});
-    if (req.headers['proxy-authorization'] !== basic(user, pass)) {
-      sock.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n');
-      return;
+  const ok = (req) => req.headers['proxy-authorization'] === basic(user, pass);
+  const deny = 'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic\r\nContent-Length: 0\r\n\r\n';
+  const server = http.createServer((req, res) => {
+    hits.push({ url: req.url, auth: req.headers['proxy-authorization'] ?? null });
+    if (!ok(req)) {
+      res.writeHead(407, { 'Proxy-Authenticate': 'Basic', 'Content-Length': '0' });
+      return res.end();
     }
-    sock.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
+    req.socket.destroy();
+  });
+  server.on('connect', (req, sock) => {
+    hits.push({ url: req.url, auth: req.headers['proxy-authorization'] ?? null });
+    sock.on('error', () => {});
+    if (!ok(req)) return sock.end(deny);
+    sock.destroy();
   });
   return { server, hits };
 }
@@ -48,64 +61,61 @@ const t = async (name, fn) => {
     process.exitCode = 1;
   }
 };
+const pageLoads = (hits) => hits.filter((h) => h.url.includes('farm-test.invalid')).length;
 
 console.log('farm egress through the proxy router');
 
-const recA = makeRecorder('ua', 'pa');
+const dead = await deadPort();
 const recB = makeRecorder('ub', 'pb');
-const portA = await listen(recA.server);
+const recC = makeRecorder('uc', 'pc');
 const portB = await listen(recB.server);
+const portC = await listen(recC.server);
 const router = new ProxyRouter(
   [
-    parseProxyLine(`127.0.0.1:${portA}:ua:pa`),
+    parseProxyLine(`127.0.0.1:${dead}:ua:pa`), // #1: nothing listens here
     parseProxyLine(`127.0.0.1:${portB}:ub:pb`),
+    parseProxyLine(`127.0.0.1:${portC}:uc:pc`),
   ],
   { cooldownMs: 60_000 }
 );
 const farm = new TokenFarm({
-  url: 'https://farm-test.invalid/', // never resolved: CONNECT goes to the recorder
+  url: 'http://farm-test.invalid/', // never resolved: requests go to the proxy
   prefix: 'no8xfe',
   profile,
   proxy: router,
 });
 
 try {
-  await t('first launch: Chrome CONNECTs through proxy #1 with its credentials; failure moves to #2', async () => {
-    let err = null;
-    try {
-      await farm.start();
-    } catch (e) {
-      err = e;
-    }
-    assert.ok(err, 'navigation through a 502 proxy must fail');
-    assert.match(err.message, /ERR_(TUNNEL|PROXY)_/, `unexpected error: ${err.message}`);
-    assert.ok(
-      recA.hits.some((h) => h.target === 'farm-test.invalid:443' && h.auth === basic('ua', 'pa')),
-      `proxy #1 did not see an authenticated CONNECT: ${JSON.stringify(recA.hits)}`
-    );
-    assert.equal(farm.launchedProxy.index, 1);
-    assert.equal(router.status().active, 2);
-    assert.equal(router.status().failures, 1);
-  });
-
-  await t('next harvest relaunches Chrome on proxy #2; the page is no longer loaded through #1', async () => {
-    // Chrome's background requests (update, gstatic) may still reach #1 while the
-    // old instance shuts down. Only the page load is asserted here.
-    const pageLoadsOnA = () => recA.hits.filter((h) => h.target === 'farm-test.invalid:443').length;
-    const beforeA = pageLoadsOnA();
-    await assert.rejects(farm.harvest(1));
+  await t('dead proxy #1 is skipped inside start(): the launch retries on #2 with its credentials', async () => {
+    const err = await farm.start().then(() => null, (e) => e);
+    assert.ok(err, 'page load through #2 must fail (its socket is closed)');
+    assert.match(err.message, /ERR_EMPTY_RESPONSE/, `expected the page error from #2, got: ${err.message}`);
     assert.equal(farm.launchedProxy.index, 2);
     assert.ok(
-      recB.hits.some((h) => h.target === 'farm-test.invalid:443' && h.auth === basic('ub', 'pb')),
-      `proxy #2 did not see an authenticated CONNECT: ${JSON.stringify(recB.hits)}`
+      recB.hits.some((h) => h.url.includes('farm-test.invalid') && h.auth === basic('ub', 'pb')),
+      `proxy #2 did not see an authenticated request: ${JSON.stringify(recB.hits)}`
     );
-    assert.equal(pageLoadsOnA(), beforeA, 'the cooled-down proxy #1 gets no new page load');
+    assert.equal(router.status().active, 2);
+    assert.equal(router.status().failures, 1, 'only the dead proxy counts as failed');
+  });
+
+  await t('after another component moves the router, the next harvest relaunches Chrome on #3', async () => {
+    router.fail(router.current(), 'test: failed Verify through #2');
+    const beforeB = pageLoads(recB.hits);
+    const err = await farm.harvest(1).then(() => null, (e) => e);
+    assert.ok(err && /ERR_EMPTY_RESPONSE/.test(err.message), `unexpected: ${err?.message}`);
+    assert.equal(farm.launchedProxy.index, 3);
+    assert.ok(
+      recC.hits.some((h) => h.url.includes('farm-test.invalid') && h.auth === basic('uc', 'pc')),
+      `proxy #3 did not see an authenticated request: ${JSON.stringify(recC.hits)}`
+    );
+    assert.equal(pageLoads(recB.hits), beforeB, 'no new page load through #2 after the move');
   });
 } finally {
   await farm.stop();
   await router.destroy();
-  await closeServer(recA.server);
   await closeServer(recB.server);
+  await closeServer(recC.server);
   fs.rmSync(profile, { recursive: true, force: true });
 }
 

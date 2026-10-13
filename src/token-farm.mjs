@@ -140,6 +140,24 @@ export class TokenFarm {
 
   async start() {
     if (this.context) return;
+    // A proxy-level failure (dead proxy, refused CONNECT) moves the router on. Then
+    // launch again on the next proxy, at most once per proxy in the list. Any other
+    // failure is thrown as before.
+    const attempts = this.proxy ? this.proxy.status().total : 1;
+    for (let attempt = 1; ; attempt++) {
+      const switchesBefore = this.proxy ? this.proxy.status().switches : 0;
+      try {
+        return await this.launch();
+      } catch (e) {
+        const moved = this.proxy && this.proxy.status().switches > switchesBefore;
+        if (!moved || attempt >= attempts) throw e;
+        this.log(`launch failed on proxy #${this.launchedProxy.index}, retrying on the next proxy`);
+        await this.stop();
+      }
+    }
+  }
+
+  async launch() {
     const chromium = loadChromium();
     this.log('launching chrome:', this.profile || '(ephemeral)');
     const launchOpts = {

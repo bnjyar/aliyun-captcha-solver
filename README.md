@@ -104,7 +104,8 @@ Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
   tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
 - **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
   proxy di konteks yang sedang jalan. Device token yang sudah dipanen sebelum itu tetap
-  ada di pool.
+  ada di pool. Kalau peluncuran gagal karena proxy (misalnya proxy mati), `start()` mencoba
+  proxy berikutnya, sebanyak jumlah proxy di daftar. Kegagalan lain dilempar seperti biasa.
 - **Tanpa `proxy`**, perilakunya sama seperti sebelumnya: koneksi langsung dan fetch global.
 - `proxy.fetch(url, init)` bisa dipakai pemanggil untuk request lain lewat proxy yang sama.
   `proxy.status()` untuk diagnosis.
