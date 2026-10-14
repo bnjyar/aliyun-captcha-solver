@@ -11,6 +11,10 @@
 // the next one and cools the failed one down. Init and Verify must leave from the
 // same IP, so per-request rotation is deliberately not offered.
 //
+// A proxy that accepts the connection and then never answers is a failure too:
+// fetch() aborts it after `timeoutMs` (headers only, not the streaming body), and
+// Chrome's own timeout codes are recognised as proxy failures.
+//
 // Nothing here knows which hosts or statuses mean "blocked" for a given site.
 // The caller passes `rotateOn(res, url)` and returns a reason string to rotate,
 // or null to keep the current proxy.
@@ -22,8 +26,15 @@ import { fetch as undiciFetch, ProxyAgent } from 'undici';
 const PROXY_DOWN = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN']);
 // undici's message when a CONNECT through the proxy is refused (407, 403, 5xx).
 const PROXY_REJECTED = /^Proxy response \(\d+\)|^Proxy Authentication Required \(407\)/;
-// Chrome's proxy-side failures, e.g. "net::ERR_TUNNEL_CONNECTION_FAILED".
-const CHROME_PROXY_ERROR = /net::(ERR_(?:PROXY|TUNNEL)_[A-Z_]+)/;
+// Chrome's proxy-side failures, e.g. "net::ERR_TUNNEL_CONNECTION_FAILED". The
+// timeout family is included: a silent proxy (CONNECT accepted, then no answer)
+// surfaces as net::ERR_TIMED_OUT / net::ERR_CONNECTION_TIMED_OUT. A site-side
+// slow path could be misread; for the farm's fast, known-good target a 60 s
+// dip is a dead path either way.
+const CHROME_PROXY_ERROR = /net::(ERR_(?:(?:PROXY|TUNNEL)_[A-Z_]+|(?:CONNECTION_)?TIMED_OUT))/;
+// Playwright's own page-load timeout, same reasoning (the net:: code may never
+// appear if the network stack is stuck before the error is emitted).
+const CHROME_GOTO_TIMEOUT = /\bpage\.(?:goto|reload): Timeout \d+ms exceeded/;
 
 // Error messages never include the line itself: it may contain a password.
 export function parseProxyLine(raw, lineNo = 0) {
@@ -97,8 +108,10 @@ export function proxyFailureReason(err) {
 
 // Playwright/Chrome counterpart of proxyFailureReason, from an error message.
 export function chromeProxyFailureReason(message) {
-  const m = CHROME_PROXY_ERROR.exec(String(message ?? ''));
-  return m ? m[1] : null;
+  const s = String(message ?? '');
+  const m = CHROME_PROXY_ERROR.exec(s);
+  if (m) return m[1];
+  return CHROME_GOTO_TIMEOUT.test(s) ? 'page load timed out' : null;
 }
 
 export class ProxyRouter {
@@ -106,13 +119,17 @@ export class ProxyRouter {
    * @param {Array<{host:string, port:number, username?:string, password?:string}>} proxies
    * @param {object} [opts]
    * @param {number}   [opts.cooldownMs=300000]  how long a failed proxy sits out
+   * @param {number}   [opts.timeoutMs=60000]    abort fetch() if no response headers arrive
+   *                                             in time and count it as a proxy failure;
+   *                                             0 disables the watchdog
    * @param {function} [opts.rotateOn]           (res, url) => reason | null; a string moves to the next proxy
    * @param {function} [opts.log]                receives one-line messages (never credentials)
    * @param {function} [opts.now=Date.now]       clock, injectable for tests
    */
-  constructor(proxies, { cooldownMs = 300_000, rotateOn = null, log = () => {}, now = Date.now } = {}) {
+  constructor(proxies, { cooldownMs = 300_000, timeoutMs = 60_000, rotateOn = null, log = () => {}, now = Date.now } = {}) {
     if (!proxies?.length) throw new Error('ProxyRouter needs at least one proxy');
     this.cooldownMs = cooldownMs;
+    this.timeoutMs = timeoutMs;
     this.rotateOn = rotateOn;
     this.log = log;
     this.now = now;
@@ -176,21 +193,47 @@ export class ProxyRouter {
   }
 
   /**
-   * fetch() through the active proxy. Proxy-level failures and rotateOn hits move
-   * the router on. The request itself is not retried: the caller sees the error.
+   * fetch() through the active proxy. Proxy-level failures, a silent proxy
+   * (no response headers within `timeoutMs`) and rotateOn hits move the router
+   * on. The request itself is not retried: the caller sees the error.
    */
   async fetch(input, init = {}) {
     const href = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
     const entry = this.current();
+    // Watchdog on the response headers only: it is cleared as soon as fetch()
+    // resolves, so a long SSE body is never cut. `timedOut` separates our abort
+    // from the caller's own.
+    let timedOut = false;
+    let timer = null;
+    let signal = init.signal;
+    if (this.timeoutMs > 0) {
+      const ac = new AbortController();
+      timer = setTimeout(() => {
+        timedOut = true;
+        ac.abort();
+      }, this.timeoutMs);
+      if (timer.unref) timer.unref();
+      signal = signal ? AbortSignal.any([signal, ac.signal]) : ac.signal;
+    }
     let res;
     try {
-      res = await undiciFetch(input, { ...init, dispatcher: entry.agent });
+      res = await undiciFetch(input, { ...init, ...(signal ? { signal } : {}), dispatcher: entry.agent });
     } catch (err) {
+      clearTimeout(timer);
+      if (timedOut && !init.signal?.aborted) {
+        const reason = `timeout ${this.timeoutMs}ms`;
+        this.fail(entry, reason);
+        throw Object.assign(new Error(`proxy #${entry.index} did not answer within ${this.timeoutMs}ms`), {
+          code: 'PROXY_TIMEOUT',
+          cause: err,
+        });
+      }
       // An abort from the caller's own signal is not the proxy's fault.
       const reason = init.signal?.aborted ? null : proxyFailureReason(err);
       if (reason) this.fail(entry, reason);
       throw err;
     }
+    clearTimeout(timer);
     const reason = this.rotateOn?.(res, href);
     if (reason) this.fail(entry, reason);
     return res;

@@ -82,6 +82,7 @@ import { createAliyunCaptcha, TokenFarm, loadProxyRouter } from 'aliyun-captcha-
 
 const proxy = loadProxyRouter('/path/ke/proxies.txt', {
   cooldownMs: 300_000,
+  timeoutMs: 60_000,         // proxy diam tanpa header respons dihitung gagal; 0 = mati
   rotateOn: null,            // (res, url) => alasan | null; string = pindah proxy
   log: console.log,
 });
@@ -98,13 +99,17 @@ Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
   yang gagal didinginkan selama `cooldownMs`. Init dan Verify harus keluar dari IP yang
   sama, jadi tidak ada rotasi per request.
 - **Yang dihitung gagal:** proxy tidak bisa dihubungi (`ECONNREFUSED` dan sejenisnya),
-  CONNECT ditolak (407, 403, 5xx), atau Chrome melaporkan `ERR_PROXY_*` / `ERR_TUNNEL_*`.
+  CONNECT ditolak (407, 403, 5xx), tidak ada header respons sampai `timeoutMs` (proxy yang
+  menerima koneksi lalu diam), atau Chrome melaporkan `ERR_PROXY_*` / `ERR_TUNNEL_*` /
+  timeout (`ERR_TIMED_OUT`, halaman tidak selesai dimuat).
   Abort dari pemanggil dan error TLS setelah tunnel terbentuk tidak dihitung.
 - **`rotateOn(res, url)`** dipanggil untuk setiap respons dari `proxy.fetch`. Paket tidak
   tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
 - **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
   proxy di konteks yang sedang jalan. Device token yang sudah dipanen sebelum itu tetap
-  ada di pool. Kalau peluncuran gagal karena proxy (misalnya proxy mati), `start()` mencoba
+  ada di pool dan tetap bisa dipakai dari IP baru (diuji lintas-IP 2026-10-15: mint dari IP B
+  dengan token dari IP A sukses dan paramnya diterima). Kalau peluncuran gagal karena proxy
+  (misalnya proxy mati), `start()` mencoba
   proxy berikutnya, sebanyak jumlah proxy di daftar. Kegagalan lain dilempar seperti biasa.
 - **Tanpa `proxy`**, perilakunya sama seperti sebelumnya: koneksi langsung dan fetch global.
 - `proxy.fetch(url, init)` bisa dipakai pemanggil untuk request lain lewat proxy yang sama.
@@ -153,7 +158,7 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test              # 55 test: cipher & request shape (14), pool (15), proxy (24), farm lewat proxy (2)
+npm test              # 59 test: cipher & request shape (14), pool (15), proxy (28), farm lewat proxy (2)
 npm run test:solver   # canary rotasi konstanta Aliyun
 ```
 

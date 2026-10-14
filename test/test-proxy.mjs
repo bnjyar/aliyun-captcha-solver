@@ -88,6 +88,21 @@ async function deadPort() {
   return port;
 }
 
+// Accepts the TCP connection and then never answers the CONNECT request. The
+// tunnels are tracked so cleanup can destroy them: server.closeAllConnections()
+// does not cover upgraded/connect sockets.
+function makeSilentProxy() {
+  const sockets = new Set();
+  const server = http.createServer(() => {});
+  server.on('connect', (req, sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.on('error', () => {});
+    // no response on purpose
+  });
+  return { server, sockets, destroy: () => { for (const s of sockets) s.destroy(); } };
+}
+
 const entryOf = (port, username, password) => ({ host: '127.0.0.1', port, username, password });
 const three = () => ['1.1.1.1:1:a:a', '2.2.2.2:2:b:b', '3.3.3.3:3:c:c'].map((s) => parseProxyLine(s));
 
@@ -173,6 +188,14 @@ await t('playwrightProxy carries server and credentials only when auth is set', 
   return r.destroy();
 });
 
+await t('timeoutMs defaults to 60 s; 0 disables the watchdog', async () => {
+  const r = new ProxyRouter(three());
+  assert.equal(r.timeoutMs, 60_000);
+  const off = new ProxyRouter(three(), { timeoutMs: 0 });
+  assert.equal(off.timeoutMs, 0);
+  await Promise.all([r.destroy(), off.destroy()]);
+});
+
 console.log('failure classification');
 
 await t('connection refused counts as a proxy failure', () => {
@@ -203,6 +226,13 @@ await t('Chrome ERR_TUNNEL / ERR_PROXY messages are recognised; plain net errors
   assert.equal(chromeProxyFailureReason('net::ERR_PROXY_CONNECTION_FAILED'), 'ERR_PROXY_CONNECTION_FAILED');
   assert.equal(chromeProxyFailureReason('net::ERR_CONNECTION_RESET'), null);
   assert.equal(chromeProxyFailureReason(undefined), null);
+});
+
+await t('Chrome timeout codes and a page-load timeout count as proxy failures', () => {
+  assert.equal(chromeProxyFailureReason('page.goto: net::ERR_TIMED_OUT at https://x'), 'ERR_TIMED_OUT');
+  assert.equal(chromeProxyFailureReason('net::ERR_CONNECTION_TIMED_OUT'), 'ERR_CONNECTION_TIMED_OUT');
+  assert.equal(chromeProxyFailureReason('page.goto: Timeout 60000ms exceeded.\nCall log: ...'), 'page load timed out');
+  assert.equal(chromeProxyFailureReason('page.waitForSelector: Timeout 30000ms exceeded'), null);
 });
 
 console.log('integration (undici + local proxy)');
@@ -243,6 +273,38 @@ await t('dead proxy: first call throws, router moves to #2, next call succeeds t
   assert.equal(res.status, 200);
   assert.equal(p2.hits.length, before + 1);
   await r.destroy();
+});
+
+await t('silent proxy: no CONNECT answer within timeoutMs is a failure; router moves to #2', async () => {
+  const silent = makeSilentProxy();
+  const silentPort = await listen(silent.server);
+  const r = mk([entryOf(silentPort, 'u1', SECRET), entryOf(p2Port, 'u2', 'p2-fake')], { timeoutMs: 250 });
+  await assert.rejects(r.fetch(urlOk), /did not answer within 250ms/);
+  assert.equal(r.status().active, 2);
+  assert.equal(r.status().failures, 1);
+  assert.ok(logs.some((l) => l.includes('timeout 250ms')), 'log names the timeout');
+  const before = p2.hits.length;
+  assert.equal((await r.fetch(urlOk)).status, 200);
+  assert.equal(p2.hits.length, before + 1);
+  await r.destroy();
+  silent.destroy();
+  await closeServer(silent.server);
+});
+
+await t('a slow body is not cut by the watchdog (the timer stops at the headers)', async () => {
+  const slow = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.flushHeaders(); // header keluar segera; body menyusul
+    setTimeout(() => res.end(JSON.stringify({ ok: true, late: true })), 600);
+  });
+  const slowPort = await listen(slow);
+  const r = mk(healthy(), { timeoutMs: 200 });
+  const res = await r.fetch(`http://127.0.0.1:${slowPort}/slow`);
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).late, true);
+  assert.equal(r.status().failures, 0, 'no proxy failure for a slow body');
+  await r.destroy();
+  await closeServer(slow);
 });
 
 await t('wrong auth (407 on CONNECT): router moves to #2', async () => {
