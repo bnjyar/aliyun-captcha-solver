@@ -191,6 +191,9 @@ export class TokenFarm {
 
   async warm() {
     const page = this.page;
+    // Stage marks for the cold-start breakdown (verbose only): ms since warm() began.
+    const t0 = Date.now();
+    const mark = (stage) => this.log(`warm ${stage} +${Date.now() - t0}ms`);
     this.log('opening', this.url);
     try {
       await page.goto(this.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -198,6 +201,7 @@ export class TokenFarm {
       this.reportProxyError(e);
       throw e;
     }
+    mark('dom-ready');
     if (this.waitSelector) {
       try {
         await page.waitForSelector(this.waitSelector, { timeout: 30000 });
@@ -205,6 +209,7 @@ export class TokenFarm {
         this.log(`warn: selector ${this.waitSelector} not found (continuing; SDK warm-up may still work)`);
       }
     }
+    mark('selector');
     await sleep(1500);
 
     // Path 1 (simplest): plain-load the Aliyun captcha SDK — NO
@@ -235,10 +240,12 @@ export class TokenFarm {
       }
     }
 
+    mark('plain-load');
     // Path 2 (fallback, opt-in): warm via a real UI message — the site's own
     // frontend then loads the SDK and runs its invisible verify cycle.
     if (!(await this.isWarm()) && this.warmMessage && this.inputSelector) {
       this.log('fallback: sending warm-up message via UI');
+      mark('fallback-sent');
       try {
         await page.fill(this.inputSelector, this.warmMessage);
         await page.keyboard.press('Enter');
@@ -251,6 +258,7 @@ export class TokenFarm {
       if (await this.isWarm()) break;
       await sleep(1000);
     }
+    mark('z_um');
     if (!(await this.isWarm())) {
       throw new Error(
         'token farm warm-up failed: z_um not available (SDK blocked, or the tab needs a login/challenge first)'
@@ -260,6 +268,7 @@ export class TokenFarm {
     // so we never grab a token that the SDK itself is about to consume.
     await sleep(8000);
     this.warmed = true;
+    mark('ready');
     this.log('warm; z_um ready');
   }
 
