@@ -19,6 +19,8 @@ const F011_PAUSE_MS = 60_000; // frequency/desync cooldown
 const FAIL_BACKOFF_MS = 35_000; // generic verify-failure backoff
 const IDLE_PAUSE_MS = 180_000; // park generation when no demand
 const DEVICE_TOKEN_TTL_MS = 240_000; // device token freshness window
+const DEVICE_LOW = 5; // refill in the background when fewer tokens are left
+const REFILL_RETRY_MS = 30_000; // a harvest that returned nothing waits this long before the next one
 
 export class CaptchaPool {
   /**
@@ -33,7 +35,7 @@ export class CaptchaPool {
       throw new Error('CaptchaPool requires a captcha client with computeCaptchaParam()');
     }
     this.captcha = captcha;
-    this.t = { ...{ PARAM_TTL_MS, MAX_PARAMS, MIN_GEN_INTERVAL_MS, F001_PAUSE_MS, F011_PAUSE_MS, FAIL_BACKOFF_MS, IDLE_PAUSE_MS, DEVICE_TOKEN_TTL_MS }, ...timing };
+    this.t = { ...{ PARAM_TTL_MS, MAX_PARAMS, MIN_GEN_INTERVAL_MS, F001_PAUSE_MS, F011_PAUSE_MS, FAIL_BACKOFF_MS, IDLE_PAUSE_MS, DEVICE_TOKEN_TTL_MS, DEVICE_LOW, REFILL_RETRY_MS }, ...timing };
 
     this.params = []; // { createdAt, value }
     this.deviceTokens = deviceTokens.map((t) => ({ addedAt: Date.now(), token: t }));
@@ -45,7 +47,9 @@ export class CaptchaPool {
     this.f001Until = 0;
     this.f011Until = 0;
     this.failBackoffUntil = 0;
-    this.collector = null; // async () => string[] device tokens (lazy refill)
+    this.collector = null; // async () => string[] device tokens (refill)
+    this.refilling = null; // the single harvest in flight (background or inline)
+    this.refillRetryAt = 0; // no background harvest again before this time
     this.timer = null;
     this.verbose = verbose;
     this.farmNeedsRestart = false;
@@ -80,10 +84,10 @@ export class CaptchaPool {
       this.deviceTokens.push({ addedAt: now, token: t });
       added++;
     }
-    if (added) {
-      this.failBackoffUntil = 0; // fresh batch clears generic backoff (NOT f001/f011)
-      this.log(`+${added} device tokens (pool ${this.deviceTokens.length})`);
-    }
+    // A fresh batch no longer clears the generic backoff. Background refills run
+    // during a backoff, and the backoff exists for Aliyun's verdict, not for the
+    // harvest. The inline refill never ran during a backoff anyway (mayMint gates it).
+    if (added) this.log(`+${added} device tokens (pool ${this.deviceTokens.length})`);
     return added;
   }
 
@@ -100,17 +104,29 @@ export class CaptchaPool {
     return null;
   }
 
-  async refillDeviceTokens() {
-    if (!this.collector) return [];
+  // Single-flight: a background harvest and an inline one share the same run.
+  refillDeviceTokens() {
+    if (!this.collector) return Promise.resolve([]);
+    if (!this.refilling) {
+      this.refilling = this.collectTokens().finally(() => {
+        this.refilling = null;
+      });
+    }
+    return this.refilling;
+  }
+
+  async collectTokens() {
+    let tokens = [];
     try {
-      const tokens = await this.collector();
-      if (Array.isArray(tokens) && tokens.length) {
-        this.addDeviceTokens(tokens);
-        return tokens;
-      }
+      tokens = await this.collector();
     } catch (e) {
       this.log('collector failed:', e.message);
     }
+    if (Array.isArray(tokens) && tokens.length) {
+      this.addDeviceTokens(tokens);
+      return tokens;
+    }
+    this.refillRetryAt = Date.now() + this.t.REFILL_RETRY_MS;
     return [];
   }
 
@@ -158,6 +174,18 @@ export class CaptchaPool {
     const now = Date.now();
     this.params = this.params.filter((p) => now - p.createdAt < this.t.PARAM_TTL_MS);
     if (this.shouldGenerate()) this.startMint();
+    this.maybeRefill(now);
+  }
+
+  // Background refill, only while there is demand: a mint should not wait for a
+  // harvest (25 page evaluations, plus a warm-up on a cold farm). Harvesting makes
+  // no Aliyun call, so pacing and backoff do not apply. Skipped while a farm restart
+  // is pending (F001) and after an empty harvest, so the farm is not hammered.
+  maybeRefill(now) {
+    if (!this.collector || this.refilling || this.farmNeedsRestart) return;
+    if (this.deviceTokens.length >= this.t.DEVICE_LOW) return;
+    if (now - this.lastActive > this.t.IDLE_PAUSE_MS || now < this.refillRetryAt) return;
+    this.refillDeviceTokens();
   }
 
   // The only place a Verify is started. Single-flight: a caller that finds a
@@ -193,7 +221,7 @@ export class CaptchaPool {
     } catch (e) {
       const code = e.verifyCode;
       this.lastError = {
-        code: code || 'ERROR',
+        code: code || e.code || 'ERROR',
         message: (e.message || '').slice(0, 200),
         captchaType: e.captchaType || null,
         at: Date.now(),
@@ -207,6 +235,11 @@ export class CaptchaPool {
       } else if (code === 'F011') {
         this.f011Until = Date.now() + this.t.F011_PAUSE_MS;
         this.log('F011 frequency — pausing verifies 60s');
+      } else if (e.code === 'PROXY_TIMEOUT') {
+        // The router already moved to the next proxy. Aliyun never answered, so
+        // there is no verdict to back off from: retry on the new proxy at once
+        // (pacing still applies).
+        this.log('proxy silent, router moved on; no backoff');
       } else {
         this.failBackoffUntil = Date.now() + this.t.FAIL_BACKOFF_MS;
         this.log('verify failed:', (e.message || '').slice(0, 120));

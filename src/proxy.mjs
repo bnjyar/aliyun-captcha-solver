@@ -220,6 +220,18 @@ export class ProxyRouter {
       res = await undiciFetch(input, { ...init, ...(signal ? { signal } : {}), dispatcher: entry.agent });
     } catch (err) {
       clearTimeout(timer);
+      // A caller that gives up on the headers with AbortSignal.timeout() (the Aliyun
+      // httpPost) is the same silent proxy as our watchdog. Any other caller abort
+      // (AbortSignal.abort(), a disconnect) is not the proxy's fault.
+      const callerTimeout = init.signal?.aborted === true && init.signal.reason?.name === 'TimeoutError';
+      if (callerTimeout) {
+        const reason = 'no response headers (caller timeout)';
+        this.fail(entry, reason);
+        throw Object.assign(new Error(`proxy #${entry.index} did not answer before the caller's timeout`), {
+          code: 'PROXY_TIMEOUT',
+          cause: err,
+        });
+      }
       if (timedOut && !init.signal?.aborted) {
         const reason = `timeout ${this.timeoutMs}ms`;
         this.fail(entry, reason);

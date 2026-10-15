@@ -185,4 +185,73 @@ await t('on-demand (MAX_PARAMS 0) mints only when get() asks', async () => {
   p.stop();
 });
 
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await t('low stock is refilled in the background while there is demand', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: ['a'], timing: { ...noWait, MAX_PARAMS: 0 } });
+  p.setCollector(async () => {
+    harvests++;
+    return ['b1', 'b2', 'b3', 'b4', 'b5', 'b6'];
+  });
+  p.start(); // no get(): only the tick runs
+  await pause(700);
+  assert.equal(harvests, 1);
+  assert.equal(p.stats().deviceTokens, 7);
+  p.stop();
+});
+
+await t('no background harvest when the pool is idle', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: [], timing: { ...noWait, MAX_PARAMS: 0, IDLE_PAUSE_MS: 50 } });
+  p.setCollector(async () => {
+    harvests++;
+    return ['x'];
+  });
+  p.start();
+  p.lastActive = Date.now() - 1000;
+  await pause(700);
+  assert.equal(harvests, 0);
+  p.stop();
+});
+
+await t('background and inline harvests share one run', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: [], timing: { ...noWait, MAX_PARAMS: 0 } });
+  p.setCollector(async () => {
+    harvests++;
+    await pause(1200); // long enough that the tick runs while the inline one is in flight
+    return ['k1', 'k2', 'k3', 'k4', 'k5', 'k6'];
+  });
+  p.start();
+  assert.equal(await p.get(3000), 'PARAM1');
+  assert.equal(harvests, 1);
+  p.stop();
+});
+
+await t('an empty harvest waits REFILL_RETRY_MS before the next background try', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: [], timing: { ...noWait, MAX_PARAMS: 0 } });
+  p.setCollector(async () => {
+    harvests++;
+    return [];
+  });
+  p.start();
+  await pause(1200);
+  assert.equal(harvests, 1);
+  assert.ok(p.refillRetryAt > Date.now());
+  p.stop();
+});
+
+await t('a silent proxy costs no Aliyun backoff: the router already moved on', async () => {
+  const err = Object.assign(new Error('proxy #1 did not answer before the caller\'s timeout'), { code: 'PROXY_TIMEOUT' });
+  const c = fake({ failWith: err });
+  const p = new CaptchaPool({ captcha: c, deviceTokens: ['a', 'b'], timing: noWait });
+  assert.equal(await p.get(300), null);
+  assert.ok(c.calls >= 2, `retried on the new proxy at once (calls ${c.calls})`);
+  assert.equal(p.stats().paused.backoff, 0);
+  assert.equal(p.stats().lastError.code, 'PROXY_TIMEOUT');
+  p.stop();
+});
+
 console.log(`\n${passed} passed`);

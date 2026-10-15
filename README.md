@@ -102,7 +102,9 @@ Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
   CONNECT ditolak (407, 403, 5xx), tidak ada header respons sampai `timeoutMs` (proxy yang
   menerima koneksi lalu diam), atau Chrome melaporkan `ERR_PROXY_*` / `ERR_TUNNEL_*` /
   timeout (`ERR_TIMED_OUT`, halaman tidak selesai dimuat).
-  Abort dari pemanggil dan error TLS setelah tunnel terbentuk tidak dihitung.
+  Pemanggil yang menyerah menunggu header dengan `AbortSignal.timeout()` (httpPost Aliyun)
+  dihitung sama dengan `timeoutMs`: proxy diam. Abort biasa dari pemanggil dan error TLS
+  setelah tunnel terbentuk tidak dihitung.
 - **`rotateOn(res, url)`** dipanggil untuk setiap respons dari `proxy.fetch`. Paket tidak
   tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
 - **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
@@ -139,7 +141,12 @@ Nilai default di `CaptchaPool`, bisa di-override lewat `timing`:
 | `MIN_GEN_INTERVAL_MS` | 10s | jarak minimum antar Verify |
 | `F001_PAUSE_MS` | 300s | cooldown risk-control |
 | `F011_PAUSE_MS` | 60s | cooldown frequency/desync |
-| `FAIL_BACKOFF_MS` | 35s | backoff verify gagal biasa |
+| `FAIL_BACKOFF_MS` | 35s | backoff verify gagal biasa. Tidak berlaku untuk proxy diam (`PROXY_TIMEOUT`): router sudah pindah proxy, dan Aliyun tidak pernah memberi putusan |
+| `DEVICE_LOW` | 5 | stok device token di bawah ini memicu harvest di latar belakang, selama ada permintaan (`IDLE_PAUSE_MS`) dan farm tidak sedang menunggu restart |
+| `REFILL_RETRY_MS` | 30s | harvest yang kosong menunggu selama ini sebelum dicoba lagi di latar belakang (harvest inline dalam `get()` tidak terpengaruh) |
+
+Harvest di latar belakang dan inline berbagi satu proses (single-flight). Harvest tidak
+memanggil Aliyun, jadi pacing dan backoff tidak berlaku untuknya.
 
 `F001` juga set `pool.farmNeedsRestart = true` — sinyal ke pemilik farm untuk
 bangun ulang tab (device context yang kena-flag, bukan sekadar pacing).

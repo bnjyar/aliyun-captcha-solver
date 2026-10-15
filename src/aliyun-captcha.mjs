@@ -77,24 +77,20 @@ function uuid() {
   return crypto.randomUUID();
 }
 
+// The signal's reason is a TimeoutError, so ProxyRouter.fetch can tell this budget
+// running out (a silent proxy: no headers) from a caller's plain cancel.
 async function httpPost(url, body, extraHeaders = {}, timeoutMs = 15000, send = fetch) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await send(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'User-Agent': 'okhttp/4.9.0',
-        ...extraHeaders,
-      },
-      body,
-      signal: controller.signal,
-    });
-    return await res.text();
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await send(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      'User-Agent': 'okhttp/4.9.0',
+      ...extraHeaders,
+    },
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return res.text();
 }
 
 // --- RC4-like cipher (shared by arg generation and encrypt) -----------------

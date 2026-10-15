@@ -291,6 +291,22 @@ await t('silent proxy: no CONNECT answer within timeoutMs is a failure; router m
   await closeServer(silent.server);
 });
 
+await t('silent proxy: a caller timeout on the headers (AbortSignal.timeout, Aliyun httpPost) is a failure too', async () => {
+  const silent = makeSilentProxy();
+  const silentPort = await listen(silent.server);
+  // Router watchdog off: only the caller's own timeout can name the silent proxy.
+  const r = mk([entryOf(silentPort, 'u1', SECRET), entryOf(p2Port, 'u2', 'p2-fake')], { timeoutMs: 0 });
+  const err = await r.fetch(urlOk, { signal: AbortSignal.timeout(250) }).catch((e) => e);
+  assert.equal(err.code, 'PROXY_TIMEOUT');
+  assert.equal(r.status().failures, 1);
+  assert.equal(r.status().active, 2);
+  assert.ok(logs.some((l) => l.includes('caller timeout')), 'log names the caller timeout');
+  assert.equal((await r.fetch(urlOk)).status, 200);
+  await r.destroy();
+  silent.destroy();
+  await closeServer(silent.server);
+});
+
 await t('a slow body is not cut by the watchdog (the timer stops at the headers)', async () => {
   const slow = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
