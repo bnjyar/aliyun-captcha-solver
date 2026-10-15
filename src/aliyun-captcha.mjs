@@ -219,6 +219,7 @@ export function createAliyunCaptcha(cfg) {
     constants = {},
     timeoutMs = 15000,
     proxy = null,
+    log = null, // optional (msg) => void: per-mint timing (init vs verify)
   } = cfg || {};
 
   if (!accessKey) throw new Error('createAliyunCaptcha: accessKey is required');
@@ -316,7 +317,9 @@ export function createAliyunCaptcha(cfg) {
 
   /** Full mint: Init -> arg -> track -> Verify. Returns captcha_verify_param. */
   async function computeCaptchaParam(deviceToken) {
+    const t0 = Date.now();
     const init = await initCaptchaRaw();
+    const tInit = Date.now();
     const certifyId = init.CertifyId;
     const argValue = arg(certifyId);
     const ct = Date.now();
@@ -345,12 +348,15 @@ export function createAliyunCaptcha(cfg) {
     const finalVal = enc(fb64);
 
     try {
-      return await verifyCaptcha(certifyId, finalVal, deviceToken);
+      const value = await verifyCaptcha(certifyId, finalVal, deviceToken);
+      log?.(`mint ok: init ${tInit - t0}ms, verify ${Date.now() - tInit}ms`);
+      return value;
     } catch (e) {
       // CaptchaType is the challenge Aliyun issued to this device at Init
       // (TRACELESS = no slider). Carry it on the error so a rejection shows
       // what we were up against, not only the code.
       e.captchaType = init.CaptchaType;
+      log?.(`mint gagal (${e.verifyCode || 'error'}): init ${tInit - t0}ms, verify ${Date.now() - tInit}ms`);
       throw e;
     }
   }

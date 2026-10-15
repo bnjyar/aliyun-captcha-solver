@@ -49,6 +49,7 @@ const captcha = createAliyunCaptcha({
   prefix:    'no8xfe',
   region:    'sgp',             // token region SDK (window.AliyunCaptchaConfig)
   endpointRegion: 'southeast',  // token region DNS di hostname
+  // log: (msg) => console.log(msg), // opsional: durasi tiap mint, Init dan Verify dipisah
 });
 
 // 2. Farm device token (butuh browser)
