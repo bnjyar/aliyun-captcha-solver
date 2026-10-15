@@ -12,6 +12,14 @@ tab browser (warm)  →  device token  →  CaptchaPool  →  captcha_verify_par
        (satu-satunya sumbangan browser)      (Node murni)
 ```
 
+Farm device token punya **dua engine** dengan kontrak yang sama (`start`/`harvest`/
+`isStale`/`restart`/`stop`):
+
+| Engine | Kelas | Butuh | Catatan |
+|---|---|---|---|
+| Chrome headless (default) | `TokenFarm` | playwright-core + profil Chrome | tab hangat; bukti live paling matang |
+| Node + jsdom (**tanpa Chrome**) | `JsdomFarm` | jsdom + aset SDK | SDK AliyunCaptcha.js **jalan di jsdom**, registrasi device (Log1) lewat jaringan dari Node; token lolos Verify live (T001) — lihat riset H13 di repo `zai` |
+
 ## Prinsip
 
 Risk engine Aliyun tidak memeriksa client saat verifikasi — trust terbentuk saat
@@ -19,7 +27,11 @@ Risk engine Aliyun tidak memeriksa client saat verifikasi — trust terbentuk sa
 dari satu tab yang hangat via `window.z_um.getToken()`. Setelah itu
 Init/Verify/pembuatan parameter semuanya jalan di Node.
 
-Konsekuensi yang harus lo terima: **butuh satu farm tab per situs**. Device token
+`JsdomFarm` menghapus tab itu: SDK dijalankan di jsdom, dan `z_um.getToken()` tetap
+komputasi lokal di dalam dokumen (nol request per token) — yang lewat jaringan hanya
+warm-up (`Log1` registrasi + `Log2`/`Log3` upload fingerprint).
+
+Konsekuensi yang harus lo terima: **butuh satu farm per situs**. Device token
 berformat `SG_WEB#<fp>...` dari cloudauth dan kemungkinan besar ter-scope ke
 tenant, jadi token dari situs A belum tentu valid untuk tenant B.
 
@@ -33,8 +45,12 @@ npm install aliyun-captcha-solver
 opsional — Kalau sudah ada di app lo, resolve otomatis. Kalau tidak, set
 `PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json`.
 
+`jsdom` (>= 30) cuma dibutuhkan kalau lo pakai `JsdomFarm` — juga peer dependency
+opsional. Kalau tidak terpasang di app lo, set `JSDOM_PATH=/path/ke/jsdom`
+(direktori paket atau `package.json`-nya).
+
 `undici` ikut terpasang otomatis, dipakai untuk jalur proxy (lihat di bawah). Butuh
-Node ≥ 20.18.1.
+Node ≥ 20.18.1 (jsdom 30 praktis butuh Node modern; diuji di Node 26).
 
 ## Pakai
 
@@ -72,6 +88,64 @@ const param = await pool.get(30_000); // captcha_verify_param, atau null
 
 Kalau cuma butuh param sekali tanpa browser, semua bisa lewat
 `captcha.computeCaptchaParam(deviceToken)` langsung.
+
+## Farm tanpa Chrome (`JsdomFarm`)
+
+Drop-in untuk `TokenFarm`: SDK AliyunCaptcha.js dijalankan di dalam jsdom, dan
+registrasi device (Log1) ikut dikirim dari Node — **tidak ada Chrome di mana pun**.
+
+```js
+import { createAliyunCaptcha, CaptchaPool, JsdomFarm, loadProxyRouter } from 'aliyun-captcha-solver';
+
+const proxy = loadProxyRouter('/path/ke/proxies.txt', { cooldownMs: 300_000, timeoutMs: 20_000 });
+const farm = new JsdomFarm({
+  url: 'https://situs-target.tld',   // origin halaman (SDK tidak butuh JS situs)
+  prefix: 'no8xfe',
+  region: 'sgp',
+  proxy,                              // semua egress farm lewat proxy aktif
+  assetsDir: '/path/ke/aset-sdk',     // opsional: AliyunCaptcha.js + feilin*.js dari disk
+  cacheDir: '/path/ke/cache',         // opsional: cache aset CDN
+  verbose: true,
+});
+await farm.start();                   // ~2-8 dtk (Log1 + aset + feilin)
+const tokens = await farm.harvest(25); // string[] (sama seperti TokenFarm)
+
+const pool = new CaptchaPool({ captcha });
+pool.setCollector(() => farm.harvest(25));
+```
+
+Env yang dikenal (opsional, sama artinya dengan opsi di atas):
+`JSDOM_PATH` (lokasi jsdom), `JSDOM_FARM_ASSETS` (dir aset SDK),
+`JSDOM_FARM_CACHE` (cache unduhan CDN; default `~/.cache/aliyun-captcha-solver/jsdom-assets`).
+
+Aturan jaringan:
+
+- **Mode `live` (default)** — XHR device di dalam halaman (`Log1` registrasi,
+  `Log2`/`Log3` upload fingerprint) diteruskan ke jaringan asli lewat `fetchImpl`
+  (= `proxy.fetch` kalau `proxy` diberikan). `auditDir` bisa diisi untuk menyimpan
+  request/response mentah saat debug.
+- **Mode `replay`** — `Log1` dijawab dari `deviceConfig` yang dikasih (hasil capture
+  sebelumnya); sepenuhnya offline. Untuk tes/debug.
+- Sub-resource: dari `assetsDir`; yang tidak ada di sana di-fetch statis dari
+  `*.alicdn.com` (build FeiLin bisa berotasi kapan saja — `DeviceConfig` yang
+  menentukan) lalu dicache. Host lain diblokir.
+- `z_um.getToken()` sendiri **tidak menyentuh jaringan** (komputasi lokal SDK).
+
+Catatan operasional:
+
+- **Health check berbasis panjang token.** Kalau registrasi gagal, SDK memasang
+  stub `z_um.getToken = () => ""` tanpa error — `start()` menolak token di bawah
+  `minTokenLen` (default 500) dan (mode live) menolak Log1 yang bukan
+  `Code 200` + `DeviceConfig`.
+- **feilin 1.5.2/048** membaca global `Worker` di ekspresi obfuscated yang jalan
+  sinkron di jalur `getToken`. jsdom tidak punya `Worker`, jadi farm memasang
+  **penanda read-only** (`!Worker` → false seperti browser; `new Worker(...)`
+  melempar eksplisit, bukan hang diam-diam).
+- `restart()` membangun ulang DOM = konteks device baru (dan Log1 baru di mode
+  live). `isStale()` mengikuti router proxy seperti `TokenFarm`.
+- Fingerprint jsdom lebih miskin dari Chrome (canvas/WebGL/audio hanya shim, tanpa
+  paket `canvas` nyata); token tetap diterima Verify live (bukti T001 di riset H13),
+  tapi ini kandidat perbaikan kalau kelak muncul F001.
 
 ## Proxy keluar (opsional)
 
@@ -124,7 +198,7 @@ Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
 |---|---|---|
 | Protokol RPC + signing HMAC-SHA1 | ✅ **Global** — seluruh Aliyun Captcha 2.0 cloud | Hanya hostname berubah, dan itu otomatis diturunkan dari `prefix` + `endpointRegion` |
 | Konstanta cipher (`argConstant`, `encryptKey`, perm-table) | ⚠️ **Per-SDK-build** | Terbukti lintas-scene dalam satu tenant. Tenant lain bisa punya build berbeda → verifikasi per tenant. Guard: `npm run test:solver` |
-| Device token (`z_um.getToken()`) | ⚠️ **Per-tenant-ish** | Butuh farm tab di origin situs target |
+| Device token (`z_um.getToken()`) | ⚠️ **Per-tenant-ish** | `TokenFarm`: tab di origin situs target. `JsdomFarm`: jsdom + aset SDK + registrasi Log1 dari Node |
 | Jalur proxy keluar (`proxy`) | ✅ **Global** — sama untuk semua situs | Pilihan "status apa berarti diblokir" ada di pemanggil (`rotateOn`) |
 
 Yang **tidak** termasuk package ini: cara pemakaian param itu sendiri (header/body/
@@ -170,12 +244,18 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test              # 59 test: cipher & request shape (14), pool (15), proxy (28), farm lewat proxy (2)
-npm run test:solver   # canary rotasi konstanta Aliyun
+npm test                # 83 test: cipher & request shape (14), pool (24), proxy (30),
+                        #          farm lewat proxy (3), jsdom farm (12)
+npm run test:solver     # canary rotasi konstanta Aliyun
 ```
 
 `test-farm-proxy.mjs` menjalankan Chrome sungguhan (`/usr/bin/google-chrome-stable`)
 melawan dua proxy lokal yang menjawab 502. Tidak ada trafik keluar.
+
+`test-jsdom-farm.mjs` jalan tanpa jsdom (logika aset, routing XHR, health gate,
+forwarding live, `isStale`) — satu tes warm-up penuh ikut jalan kalau `JSDOM_PATH`,
+`JSDOM_FARM_ASSETS`, dan `JSDOM_FARM_TEST_DEVICE_CONFIG` (file berisi blob
+`DeviceConfig`) di-set. Semua offline.
 
 `test-solver.mjs` yang paling penting: kalau konstanta cipher FeiLin berubah,
 test inilah yang gagal duluan — sebelum request apa pun ditolak diam-diam.
@@ -185,6 +265,9 @@ test inilah yang gagal duluan — sebelum request apa pun ditolak diam-diam.
 ```bash
 PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json \
   node src/token-farm.mjs --url https://site.tld --prefix abc123 --count 25
+
+JSDOM_PATH=/path/ke/jsdom JSDOM_FARM_ASSETS=/path/ke/aset-sdk \
+  node src/jsdom-farm.mjs --prefix abc123 --count 3      # tanpa Chrome
 ```
 
 ## Asal-usul

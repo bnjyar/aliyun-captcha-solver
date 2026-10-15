@@ -1,8 +1,9 @@
 // index.mjs — public entrypoint.
 //
-//   import { createAliyunCaptcha, CaptchaPool, TokenFarm } from 'aliyun-captcha-solver';
+//   import { createAliyunCaptcha, CaptchaPool, TokenFarm, JsdomFarm } from 'aliyun-captcha-solver';
 
 export { createAliyunCaptcha, generateArg, encrypt, aliHash } from './aliyun-captcha.mjs';
 export { CaptchaPool } from './captcha-pool.mjs';
 export { TokenFarm } from './token-farm.mjs';
+export { JsdomFarm } from './jsdom-farm.mjs';
 export { ProxyRouter, loadProxyRouter, parseProxyList, parseProxyLine } from './proxy.mjs';

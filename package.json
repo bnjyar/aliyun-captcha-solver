@@ -11,22 +11,26 @@
     "./aliyun-captcha": "./src/aliyun-captcha.mjs",
     "./captcha-pool": "./src/captcha-pool.mjs",
     "./token-farm": "./src/token-farm.mjs",
+    "./jsdom-farm": "./src/jsdom-farm.mjs",
     "./proxy": "./src/proxy.mjs",
     "./package.json": "./package.json"
   },
   "files": ["src", "README.md"],
   "scripts": {
-    "test": "node test/test-solver.mjs && node test/test-pool.mjs && node test/test-proxy.mjs && node test/test-farm-proxy.mjs",
+    "test": "node test/test-solver.mjs && node test/test-pool.mjs && node test/test-proxy.mjs && node test/test-farm-proxy.mjs && node test/test-jsdom-farm.mjs",
     "test:solver": "node test/test-solver.mjs",
     "test:pool": "node test/test-pool.mjs",
     "test:proxy": "node test/test-proxy.mjs",
-    "test:farm-proxy": "node test/test-farm-proxy.mjs"
+    "test:farm-proxy": "node test/test-farm-proxy.mjs",
+    "test:jsdom-farm": "node test/test-jsdom-farm.mjs"
   },
   "peerDependencies": {
-    "playwright-core": ">=1.40"
+    "playwright-core": ">=1.40",
+    "jsdom": ">=30"
   },
   "peerDependenciesMeta": {
-    "playwright-core": { "optional": true }
+    "playwright-core": { "optional": true },
+    "jsdom": { "optional": true }
   },
   "keywords": ["aliyun", "captcha", "feilin", "captcha-open", "anti-bot"],
   "sideEffects": false,
