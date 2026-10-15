@@ -201,6 +201,20 @@ await t('low stock is refilled in the background while there is demand', async (
   p.stop();
 });
 
+await t('stale stock does not count as stock for the background refill', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), timing: { ...noWait, MAX_PARAMS: 0, DEVICE_TOKEN_TTL_MS: 1000 } });
+  p.deviceTokens = Array.from({ length: 6 }, (_, i) => ({ addedAt: Date.now() - 5000, token: 'old' + i }));
+  p.setCollector(async () => {
+    harvests++;
+    return ['n1'];
+  });
+  p.start();
+  await pause(700);
+  assert.equal(harvests, 1);
+  p.stop();
+});
+
 await t('no background harvest when the pool is idle', async () => {
   let harvests = 0;
   const p = new CaptchaPool({ captcha: fake(), deviceTokens: [], timing: { ...noWait, MAX_PARAMS: 0, IDLE_PAUSE_MS: 50 } });

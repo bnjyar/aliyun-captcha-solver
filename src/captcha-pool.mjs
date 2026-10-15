@@ -183,7 +183,9 @@ export class CaptchaPool {
   // is pending (F001) and after an empty harvest, so the farm is not hammered.
   maybeRefill(now) {
     if (!this.collector || this.refilling || this.farmNeedsRestart) return;
-    if (this.deviceTokens.length >= this.t.DEVICE_LOW) return;
+    // Stale tokens do not count: popDeviceToken would drop them and harvest inline.
+    const fresh = this.deviceTokens.filter((e) => now - e.addedAt < this.t.DEVICE_TOKEN_TTL_MS).length;
+    if (fresh >= this.t.DEVICE_LOW) return;
     if (now - this.lastActive > this.t.IDLE_PAUSE_MS || now < this.refillRetryAt) return;
     this.refillDeviceTokens();
   }
