@@ -142,9 +142,9 @@ Nilai default di `CaptchaPool`, bisa di-override lewat `timing`:
 | `MIN_GEN_INTERVAL_MS` | 10s | jarak minimum antar Verify |
 | `F001_PAUSE_MS` | 300s | cooldown risk-control |
 | `F011_PAUSE_MS` | 60s | cooldown frequency/desync |
-| `FAIL_BACKOFF_MS` | 35s | backoff verify gagal biasa. Tidak berlaku untuk proxy diam (`PROXY_TIMEOUT`): router sudah pindah proxy, dan Aliyun tidak pernah memberi putusan |
+| `FAIL_BACKOFF_MS` | 35s | backoff verify gagal biasa. Tidak berlaku untuk kegagalan jalur proxy (`PROXY_TIMEOUT`, atau error dengan `proxyFailure`: CONNECT ditolak 407/429, proxy mati): router sudah pindah proxy, dan Aliyun tidak pernah memberi putusan |
 | `DEVICE_LOW` | 5 | stok device token di bawah ini memicu harvest di latar belakang, selama ada permintaan (`IDLE_PAUSE_MS`) dan farm tidak sedang menunggu restart |
-| `REFILL_RETRY_MS` | 30s | harvest yang kosong menunggu selama ini sebelum dicoba lagi di latar belakang (harvest inline dalam `get()` tidak terpengaruh) |
+| `REFILL_RETRY_MS` | 30s | jeda antar harvest di latar belakang, berhasil atau tidak. Relaunch farm adalah rentetan koneksi proxy, jadi tidak boleh diulang tiap tick (harvest inline dalam `get()` tidak terpengaruh) |
 
 Harvest di latar belakang dan inline berbagi satu proses (single-flight). Harvest tidak
 memanggil Aliyun, jadi pacing dan backoff tidak berlaku untuknya.

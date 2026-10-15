@@ -130,11 +130,13 @@ export class CaptchaPool {
     } catch (e) {
       this.log('collector failed:', e.message);
     }
+    // Rate-limited whether or not it worked. A harvest that relaunches the farm is a
+    // burst of proxy connections; repeating it at tick speed hammers rate-limited proxies.
+    this.refillRetryAt = Date.now() + this.t.REFILL_RETRY_MS;
     if (Array.isArray(tokens) && tokens.length) {
       this.addDeviceTokens(tokens);
       return tokens;
     }
-    this.refillRetryAt = Date.now() + this.t.REFILL_RETRY_MS;
     return [];
   }
 
@@ -246,11 +248,11 @@ export class CaptchaPool {
       } else if (code === 'F011') {
         this.f011Until = Date.now() + this.t.F011_PAUSE_MS;
         this.log('F011 frequency — pausing verifies 60s');
-      } else if (e.code === 'PROXY_TIMEOUT') {
-        // The router already moved to the next proxy. Aliyun never answered, so
-        // there is no verdict to back off from: retry on the new proxy at once
-        // (pacing still applies).
-        this.log('proxy silent, router moved on; no backoff');
+      } else if (e.code === 'PROXY_TIMEOUT' || e.proxyFailure) {
+        // The router already moved to the next proxy (a silent proxy, a refused
+        // CONNECT such as 429). Aliyun never answered, so there is no verdict to back
+        // off from: retry on the new proxy at once (pacing still applies).
+        this.log(`proxy failed (${e.proxyFailure || e.code}), router moved on; no backoff`);
       } else {
         this.failBackoffUntil = Date.now() + this.t.FAIL_BACKOFF_MS;
         this.log('verify failed:', (e.message || '').slice(0, 120));

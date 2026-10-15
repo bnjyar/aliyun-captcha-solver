@@ -276,6 +276,30 @@ await t('an empty harvest waits REFILL_RETRY_MS before the next background try',
   p.stop();
 });
 
+await t('a refused CONNECT (proxy 429) costs no Aliyun backoff either', async () => {
+  const err = Object.assign(new TypeError('fetch failed'), { proxyFailure: 'Proxy response (429) !== 200 when HTTP Tunneling' });
+  const c = fake({ failWith: err });
+  const p = new CaptchaPool({ captcha: c, deviceTokens: ['a', 'b'], timing: noWait });
+  assert.equal(await p.get(300), null);
+  assert.ok(c.calls >= 2, `retried on the new proxy at once (calls ${c.calls})`);
+  assert.equal(p.stats().paused.backoff, 0);
+  p.stop();
+});
+
+await t('background refill is rate-limited: a farm that stays stale is harvested once per REFILL_RETRY_MS', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: Array.from({ length: 25 }, (_, i) => 'g' + i), timing: { ...noWait, MAX_PARAMS: 0 } });
+  p.setStaleCheck(() => true); // never cleared: each tick would relaunch without the limit
+  p.setCollector(async () => {
+    harvests++;
+    return ['s1'];
+  });
+  p.start();
+  await pause(1500);
+  assert.equal(harvests, 1);
+  p.stop();
+});
+
 await t('a silent proxy costs no Aliyun backoff: the router already moved on', async () => {
   const err = Object.assign(new Error('proxy #1 did not answer before the caller\'s timeout'), { code: 'PROXY_TIMEOUT' });
   const c = fake({ failWith: err });

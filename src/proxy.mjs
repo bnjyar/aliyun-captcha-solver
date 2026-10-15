@@ -242,7 +242,11 @@ export class ProxyRouter {
       }
       // An abort from the caller's own signal is not the proxy's fault.
       const reason = init.signal?.aborted ? null : proxyFailureReason(err);
-      if (reason) this.fail(entry, reason);
+      if (reason) {
+        this.fail(entry, reason);
+        // Penanda untuk pemanggil: error ini dari jalur proxy, bukan dari tujuannya.
+        err.proxyFailure = reason;
+      }
       throw err;
     }
     clearTimeout(timer);

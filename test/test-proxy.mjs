@@ -307,6 +307,17 @@ await t('silent proxy: a caller timeout on the headers (AbortSignal.timeout, Ali
   await closeServer(silent.server);
 });
 
+await t('a proxy-level failure is marked on the error for the caller (proxyFailure)', async () => {
+  const closed = net.createServer();
+  const closedPort = await listen(closed);
+  await closeServer(closed); // nothing listens: ECONNREFUSED on the first proxy
+  const r = mk([entryOf(closedPort, 'u1', SECRET), entryOf(p2Port, 'u2', 'p2-fake')]);
+  const err = await r.fetch(urlOk).catch((e) => e);
+  assert.ok(err.proxyFailure, 'caller can tell a proxy failure from a target failure');
+  assert.equal(r.status().active, 2);
+  await r.destroy();
+});
+
 await t('a slow body is not cut by the watchdog (the timer stops at the headers)', async () => {
   const slow = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
