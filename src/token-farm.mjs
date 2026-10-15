@@ -269,10 +269,16 @@ export class TokenFarm {
     );
   }
 
+  // True when the router moved on since Chrome was launched. A harvest relaunches the
+  // farm (about 70 s cold). A caller can run that relaunch in the background instead.
+  isStale() {
+    return !!(this.context && this.proxy && this.proxy.current() !== this.launchedProxy);
+  }
+
   async harvest(count = 25) {
     // The router moved on (a failed Verify or Chrome load). Relaunch so the tab
     // leaves from the same IP as the rest of the solver.
-    if (this.context && this.proxy && this.proxy.current() !== this.launchedProxy) {
+    if (this.isStale()) {
       this.log('active proxy changed, relaunching farm');
       await this.restart();
     }

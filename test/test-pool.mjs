@@ -201,6 +201,25 @@ await t('low stock is refilled in the background while there is demand', async (
   p.stop();
 });
 
+await t('a stale farm refills in the background even with full stock', async () => {
+  let harvests = 0;
+  const p = new CaptchaPool({ captcha: fake(), deviceTokens: Array.from({ length: 25 }, (_, i) => 'f' + i), timing: { ...noWait, MAX_PARAMS: 0 } });
+  let stale = false;
+  p.setStaleCheck(() => stale);
+  p.setCollector(async () => {
+    harvests++;
+    stale = false; // the relaunch brings the farm onto the active proxy
+    return ['r1'];
+  });
+  p.start();
+  await pause(700);
+  assert.equal(harvests, 0, 'full and fresh stock, farm current: no harvest');
+  stale = true;
+  await pause(700);
+  assert.equal(harvests, 1, 'farm stale: one background harvest (relaunch)');
+  p.stop();
+});
+
 await t('stale stock does not count as stock for the background refill', async () => {
   let harvests = 0;
   const p = new CaptchaPool({ captcha: fake(), timing: { ...noWait, MAX_PARAMS: 0, DEVICE_TOKEN_TTL_MS: 1000 } });

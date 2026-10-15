@@ -65,6 +65,27 @@ const pageLoads = (hits) => hits.filter((h) => h.url.includes('farm-test.invalid
 
 console.log('farm egress through the proxy router');
 
+// isStale() needs no Chrome: a farm that never launched cannot be stale, and one
+// whose router moved on since its launch is.
+{
+  // The router hands out the same entry object each time; isStale compares identity.
+  const e1 = { index: 1 };
+  const e2 = { index: 2 };
+  const fakeRouter = { current: () => e1 };
+  const f = new TokenFarm({ url: 'https://farm-test.invalid', prefix: 'no8xfe', region: 'sgp', proxy: fakeRouter, profile: path.join(here, '.tmp-stale-unused') });
+  f.launchedProxy = e1;
+  f.context = null;
+  assert.equal(f.isStale(), false, 'never launched: not stale');
+  f.context = {};
+  assert.equal(f.isStale(), false, 'launched on the active proxy: not stale');
+  fakeRouter.current = () => e2;
+  assert.equal(f.isStale(), true, 'router moved on: stale');
+  f.proxy = null;
+  assert.equal(f.isStale(), false, 'no proxy: never stale');
+  passed++;
+  console.log('  ✓ isStale() follows the router');
+}
+
 const dead = await deadPort();
 const recB = makeRecorder('ub', 'pb');
 const recC = makeRecorder('uc', 'pc');

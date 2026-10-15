@@ -48,6 +48,7 @@ export class CaptchaPool {
     this.f011Until = 0;
     this.failBackoffUntil = 0;
     this.collector = null; // async () => string[] device tokens (refill)
+    this.staleCheck = null; // () => boolean, see setStaleCheck
     this.refilling = null; // the single harvest in flight (background or inline)
     this.refillRetryAt = 0; // no background harvest again before this time
     this.timer = null;
@@ -73,6 +74,13 @@ export class CaptchaPool {
 
   setCollector(fn) {
     this.collector = fn;
+  }
+
+  // Optional () => boolean: true when the collector's farm is out of date (its
+  // proxy moved on). Background refill then runs even with full stock, so the
+  // relaunch happens off the request path.
+  setStaleCheck(fn) {
+    this.staleCheck = fn;
   }
 
   addDeviceTokens(tokens) {
@@ -185,7 +193,8 @@ export class CaptchaPool {
     if (!this.collector || this.refilling || this.farmNeedsRestart) return;
     // Stale tokens do not count: popDeviceToken would drop them and harvest inline.
     const fresh = this.deviceTokens.filter((e) => now - e.addedAt < this.t.DEVICE_TOKEN_TTL_MS).length;
-    if (fresh >= this.t.DEVICE_LOW) return;
+    const stale = this.staleCheck ? this.staleCheck() : false;
+    if (fresh >= this.t.DEVICE_LOW && !stale) return;
     if (now - this.lastActive > this.t.IDLE_PAUSE_MS || now < this.refillRetryAt) return;
     this.refillDeviceTokens();
   }

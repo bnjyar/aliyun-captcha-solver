@@ -151,6 +151,10 @@ memanggil Aliyun, jadi pacing dan backoff tidak berlaku untuknya.
 `F001` juga set `pool.farmNeedsRestart = true` — sinyal ke pemilik farm untuk
 bangun ulang tab (device context yang kena-flag, bukan sekadar pacing).
 
+`pool.setStaleCheck(() => farm.isStale())` memberi tahu pool kalau farm tertinggal dari
+proxy aktif. Saat itu refill latar belakang jalan walau stok masih penuh, jadi relaunch
+farm (sekitar 70 dtk dari dingin) terjadi di luar jalur request. Harvest tetap single-flight.
+
 Verify tidak pernah berjalan bersamaan: hanya satu mint in-flight, baik dari
 background tick maupun dari `get()` (single-flight). Caller yang menemukan mint
 sedang jalan ikut menunggu hasilnya, tidak memulai Verify kedua.
