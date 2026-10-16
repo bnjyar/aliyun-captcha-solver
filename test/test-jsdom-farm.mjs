@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { JsdomFarm, indexAssets, pickLocalAsset, resolveJsdom, installShims } from '../src/jsdom-farm.mjs';
+import { JsdomFarm, indexAssets, pickLocalAsset, newestFeilinBuild, resolveJsdom, installShims } from '../src/jsdom-farm.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jsdom-farm-test-'));
@@ -37,10 +37,31 @@ await t('asset index picks the exact basename, and a feilin build by number only
   fs.writeFileSync(path.join(dir, 'AliyunCaptcha.js'), '// sdk');
   fs.writeFileSync(path.join(dir, 'feilin048-full.js'), '// feilin 048');
   const index = indexAssets(dir);
-  assert.equal(pickLocalAsset(index, 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js'), path.join(dir, 'AliyunCaptcha.js'));
-  assert.equal(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin048.abc123.js'), path.join(dir, 'feilin048-full.js'), 'same build number: local file is reused');
+  assert.deepEqual(pickLocalAsset(index, 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js'), { file: path.join(dir, 'AliyunCaptcha.js'), pinned: false });
+  assert.deepEqual(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin048.abc123.js'), { file: path.join(dir, 'feilin048-full.js'), pinned: false }, 'same build number: local file is reused');
   assert.equal(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin045.abc123.js'), null, 'different build: must be fetched, not faked');
   assert.equal(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/dynamicJS/3.29.0/pe.080.x.js'), null);
+});
+
+await t('pinFeilin: build apa pun dilayani dari build lokal yang dipin (imun rotasi server)', () => {
+  const dir = path.join(tmp, 'pinned-assets');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'AliyunCaptcha.js'), '// sdk');
+  fs.writeFileSync(path.join(dir, 'feilin045-full.js'), '// feilin 045');
+  fs.writeFileSync(path.join(dir, 'feilin048-full.js'), '// feilin 048');
+  const index = indexAssets(dir);
+  const asked049 = 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin049.deadbeef.js';
+  assert.deepEqual(pickLocalAsset(index, asked049, '045'), { file: path.join(dir, 'feilin045-full.js'), pinned: true }, 'server minta 049, yang dilayani 045');
+  assert.deepEqual(pickLocalAsset(index, asked049, 'auto'), { file: path.join(dir, 'feilin048-full.js'), pinned: true }, 'auto = build tertinggi yang ada');
+  assert.equal(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin045.x.js', '045').pinned, false, 'build yang sama bukan substitusi');
+  assert.equal(pickLocalAsset(index, asked049, '051'), null, 'pin tidak ada di disk: caller yang memutuskan');
+  assert.equal(newestFeilinBuild(index), '048');
+  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', assetsDir: dir, pinFeilin: 'auto' });
+  assert.equal(farm.effectivePin(index), '048');
+  farm.pinFeilin = null;
+  assert.equal(farm.effectivePin(index), null);
+  farm.pinFeilin = '045';
+  assert.equal(farm.effectivePin(index), '045');
 });
 
 await t('a missing asset directory is an empty index, not an error', () => {
@@ -190,11 +211,15 @@ await t('harvest() on a stopped farm returns [] instead of throwing', async () =
 await t('stats() reports engine/mode/state without tokens', async () => {
   const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
   farm.liveRequests.push({ action: 'Log1', ok: true, status: 200, code: '200', ms: 120 });
+  farm.feilinBuild = '048';
+  farm.feilinRequested = '048';
+  farm.feilinSource = 'cdn';
   const s = farm.stats();
   assert.equal(s.engine, 'jsdom');
   assert.equal(s.mode, 'live');
   assert.equal(s.state, 'idle');
   assert.equal(s.liveRequests.length, 1);
+  assert.deepEqual(s.feilin, { build: '048', requested: '048', source: 'cdn', pinned: false }, 'rotasi build terlihat di stats');
   assert.equal(JSON.stringify(s).includes('SG_WEB'), false);
 });
 

@@ -137,10 +137,19 @@ Catatan operasional:
   stub `z_um.getToken = () => ""` tanpa error — `start()` menolak token di bawah
   `minTokenLen` (default 500) dan (mode live) menolak Log1 yang bukan
   `Code 200` + `DeviceConfig`.
+- **Build FeiLin mengikuti server.** `DeviceConfig.version` menentukan build yang dimuat;
+  yang tidak ada di `assetsDir` di-fetch statis dari CDN lalu dicache. **Jangan pin build
+  untuk registrasi segar** — server mengikat build ke registrasi yang ia terbitkan dan
+  menandai downgrade (F001; diukur 2026-10-16). `pinFeilin` hanya untuk sesi dengan
+  identitas registrasi lama (mode replay). Build yang dipakai terlihat di `stats().feilin`
+  (dan `/healthz` pemanggil, mis. `farmFeilin`).
 - **feilin 1.5.2/048** membaca global `Worker` di ekspresi obfuscated yang jalan
   sinkron di jalur `getToken`. jsdom tidak punya `Worker`, jadi farm memasang
   **penanda read-only** (`!Worker` → false seperti browser; `new Worker(...)`
   melempar eksplisit, bukan hang diam-diam).
+- `pinFeilin` ('045' atau 'auto') melayani SEMUA permintaan FeiLin dari build lokal tertentu —
+  mekanismenya bekerja, tapi untuk registrasi segar server menolak downgrade (F001, diukur
+  2026-10-16). Pakai hanya kalau identitas registrasi memang dari era build itu (replay).
 - `restart()` membangun ulang DOM = konteks device baru (dan Log1 baru di mode
   live). `isStale()` mengikuti router proxy seperti `TokenFarm`.
 - Fingerprint jsdom lebih miskin dari Chrome (canvas/WebGL/audio hanya shim, tanpa

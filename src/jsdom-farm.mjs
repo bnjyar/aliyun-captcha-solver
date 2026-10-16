@@ -79,19 +79,50 @@ export function indexAssets(dir) {
  * Pick the local file for a requested URL: exact basename first, then the FeiLin
  * build number (a captured bundle may be named feilin048-full.js rather than
  * feilin048.<sha>.js). Null = not local (caller fetches + caches).
+ *
+ * `pin` (e.g. '045') makes every FeiLin request resolve to that local build — the
+ * server picks the build by `DeviceConfig.version` and can rotate it at any time;
+ * pinning freezes the runtime the farm runs (see `pinFeilin`). The returned entry
+ * carries `pinned: true` so callers can report the substitution.
  */
-export function pickLocalAsset(index, url) {
+export function pickLocalAsset(index, url, pin = null) {
   let base = '';
   try { base = path.basename(new URL(url).pathname); } catch { return null; }
   if (!base) return null;
-  if (index.all.has(base)) return index.all.get(base);
   const feilin = base.match(/^(feilin\d+)/);
+  if (feilin && pin) {
+    const wanted = String(pin).toLowerCase() === 'auto'
+      ? newestFeilinBuild(index)
+      : String(pin).replace(/^feilin/i, '').replace(/\D/g, '');
+    if (!wanted) return null;
+    const wantedNum = Number(wanted);
+    const askedNum = Number(feilin[1].replace('feilin', ''));
+    for (const [name, full] of index.all) {
+      const m = name.match(/^feilin(\d+)/);
+      if (m && name.endsWith('.js') && Number(m[1]) === wantedNum) {
+        return { file: full, pinned: askedNum !== wantedNum }; // substitusi build = 'pinned'
+      }
+    }
+    return null; // pinned build not on disk: caller decides (fetch / fail)
+  }
+  if (index.all.has(base)) return { file: index.all.get(base), pinned: false };
   if (feilin) {
     for (const [name, full] of index.all) {
-      if (name.startsWith(feilin[1]) && name.endsWith('.js')) return full;
+      if (name.startsWith(feilin[1]) && name.endsWith('.js')) return { file: full, pinned: false };
     }
   }
   return null;
+}
+
+/** Highest FeiLin build number present in an asset index, zero-padded ('048'), or null. */
+export function newestFeilinBuild(index) {
+  let best = null;
+  for (const name of index.all.keys()) {
+    const m = name.match(/^feilin(\d+)/);
+    if (!m) continue;
+    if (best === null || Number(m[1]) > Number(best)) best = m[1];
+  }
+  return best;
 }
 
 // --- browser shims (jsdom has no canvas/WebGL/audio/Worker; the SDK tolerates
@@ -230,6 +261,12 @@ export class JsdomFarm {
    * @param {string}  [opts.deviceConfig]   DeviceConfig blob for replay mode
    * @param {string}  [opts.assetsDir]      dir with AliyunCaptcha.js / feilin*.js (env JSDOM_FARM_ASSETS)
    * @param {string}  [opts.cacheDir]       where CDN downloads are cached (env JSDOM_FARM_CACHE)
+   * @param {string}  [opts.pinFeilin]      build number ('045') or 'auto' (highest local build):
+   *                                        every FeiLin request is served from that local build,
+   *                                        whatever `DeviceConfig.version` asks for (env
+   *                                        JSDOM_FARM_PIN_FEILIN). Makes the farm immune to the
+   *                                        server rotating the FeiLin build; stop pinning (or bump
+   *                                        the pin) when Aliyun starts rejecting old builds (F00x).
    * @param {string}  [opts.auditDir]       live mode: dump raw device request/response pairs here
    * @param {object}  [opts.proxy]          ProxyRouter from ./proxy.mjs. Every outbound call the
    *                                        farm makes (Log1/Log2/Log3, asset downloads) leaves
@@ -249,6 +286,7 @@ export class JsdomFarm {
     deviceConfig = null,
     assetsDir = process.env.JSDOM_FARM_ASSETS || null,
     cacheDir = process.env.JSDOM_FARM_CACHE || DEFAULT_CACHE_DIR,
+    pinFeilin = process.env.JSDOM_FARM_PIN_FEILIN || null,
     auditDir = null,
     proxy = null,
     fetchImpl = null,
@@ -267,6 +305,7 @@ export class JsdomFarm {
     this.deviceConfig = deviceConfig;
     this.assetsDir = assetsDir;
     this.cacheDir = cacheDir;
+    this.pinFeilin = pinFeilin ? String(pinFeilin).trim() || null : null;
     this.auditDir = auditDir;
     this.proxy = proxy;
     this.fetchImpl = fetchImpl || (proxy ? (u, i) => proxy.fetch(u, i) : (u, i) => fetch(u, i));
@@ -295,9 +334,33 @@ export class JsdomFarm {
   // --- asset serving -----------------------------------------------------------
 
   serveLocal(index, requestUrl) {
-    const file = pickLocalAsset(index, requestUrl);
-    if (!file) return null;
-    return { body: fs.readFileSync(file), from: file };
+    const hit = pickLocalAsset(index, requestUrl, this.effectivePin(index));
+    if (!hit) return null;
+    const base = path.basename(hit.file);
+    const build = (base.match(/^feilin(\d+)/) || [])[1] || null;
+    if (build) {
+      this.feilinBuild = build;
+      this.feilinSource = 'local';
+      const asked = (path.basename(new URL(requestUrl).pathname).match(/feilin(\d+)/) || [])[1] || null;
+      this.feilinRequested = asked;
+    }
+    if (hit.pinned) {
+      this.pinnedServes = (this.pinnedServes || 0) + 1;
+      this.log(`feilin pinned: ${path.basename(hit.file)} served for ${path.basename(new URL(requestUrl).pathname).slice(0, 40)}`);
+    }
+    return { body: fs.readFileSync(hit.file), from: hit.file, pinned: hit.pinned };
+  }
+
+  /** 'auto' → highest local build (assets dir wins over the CDN cache's opaque names). */
+  effectivePin(index) {
+    if (!this.pinFeilin) return null;
+    if (this.pinFeilin !== 'auto') return this.pinFeilin;
+    const auto = newestFeilinBuild(index);
+    if (!auto) {
+      this.log('pinFeilin=auto tapi tidak ada feilin* di assets dir — tidak dipin');
+      return null;
+    }
+    return auto;
   }
 
   makeInterceptor(index) {
@@ -310,6 +373,12 @@ export class JsdomFarm {
         try { host = new URL(url).host; } catch { /* noop */ }
         if (CDN_HOST_RE.test(host)) {
           const cached = this.cachePath(url);
+          const build = (path.basename(new URL(url).pathname).match(/feilin(\d+)/) || [])[1] || null;
+          if (build) {
+            this.feilinBuild = build;
+            this.feilinRequested = build;
+            this.feilinSource = 'cdn';
+          }
           if (cached && fs.existsSync(cached)) return new Response(fs.readFileSync(cached), { headers: this.contentType(url) });
           this.log('cdn-fetch', url.slice(0, 120));
           const r = await this.fetchImpl(url, { signal: AbortSignal.timeout(this.timeoutMs) });
@@ -634,6 +703,7 @@ export class JsdomFarm {
       mode: this.mode,
       state: this.state,
       warmed: this.warmed,
+      feilin: this.feilinBuild ? { build: this.feilinBuild, requested: this.feilinRequested ?? this.feilinBuild, source: this.feilinSource, pinned: (this.pinnedServes || 0) > 0 } : null,
       assetsDir: this.assetsDir,
       minTokenLen: this.minTokenLen,
       liveRequests: this.liveRequests.slice(-5).map((r) => ({ action: r.action, ok: r.ok, status: r.status ?? null, code: r.code ?? null, ms: r.ms ?? null })),
