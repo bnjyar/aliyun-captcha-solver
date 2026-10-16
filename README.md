@@ -133,6 +133,13 @@ Aturan jaringan:
 
 Catatan operasional:
 
+- **Warm di-retry** (`warmAttempts`, default 2; env `JSDOM_FARM_WARM_ATTEMPTS`). Tiap percobaan =
+  DOM baru (+ registrasi Log1 baru di mode live), dan aset hasil unduhan CDN dibuang dulu supaya
+  unduhan setengah jadi tidak dipakai selamanya. Farm yang dingin **memanas-kan diri** di
+  `harvest()` berikutnya (jalur kolektor pool), jadi kegagalan sementara tidak mematikan farm
+  permanen; `stats().warmFailures`/`lastWarmError` menunjukkan penyebabnya. Retry **tidak**
+  menolong kalau build SDK baru memang butuh API yang belum di-shim — itu perbaikan shim, dan
+  memang tidak ada jalan "turun build" (server menandai downgrade: F001).
 - **Health check berbasis panjang token.** Kalau registrasi gagal, SDK memasang
   stub `z_um.getToken = () => ""` tanpa error — `start()` menolak token di bawah
   `minTokenLen` (default 500) dan (mode live) menolak Log1 yang bukan

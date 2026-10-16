@@ -293,12 +293,13 @@ export class JsdomFarm {
     timeoutMs = 15000,
     settleMs = 0,
     minTokenLen = 500,
+    warmAttempts = parseInt(process.env.JSDOM_FARM_WARM_ATTEMPTS ?? '2', 10) || 2,
+    warmRetryDelayMs = 1500,
     verbose = false,
   } = {}) {
     if (!prefix) throw new Error('JsdomFarm requires prefix');
     if (mode !== 'live' && mode !== 'replay') throw new Error(`JsdomFarm: unknown mode "${mode}"`);
-    if (mode === 'replay' && !deviceConfig) throw new Error('JsdomFarm: replay mode needs deviceConfig');
-    this.url = url;
+    if (mode === 'replay' && !deviceConfig) throw new Error('JsdomFarm: replay mode needs deviceConfig');    this.url = url;
     this.prefix = prefix;
     this.region = region;
     this.mode = mode;
@@ -312,6 +313,11 @@ export class JsdomFarm {
     this.timeoutMs = timeoutMs;
     this.settleMs = settleMs;
     this.minTokenLen = minTokenLen;
+    this.warmAttempts = Math.max(1, warmAttempts);
+    this.warmRetryDelayMs = Math.max(0, warmRetryDelayMs);
+    this.warmFailures = 0;
+    this.lastWarmError = null;
+    this.cdnFetches = [];
     this.verbose = verbose;
 
     this.dom = null;
@@ -387,6 +393,7 @@ export class JsdomFarm {
             fs.mkdirSync(path.dirname(cached), { recursive: true });
             fs.writeFileSync(cached, buf);
           }
+          if (!this.cdnFetches.includes(url)) this.cdnFetches.push(url);
           return new Response(buf, { status: r.status, headers: this.contentType(url, r.headers.get('content-type')) });
         }
         this.blockedHosts.set(host, (this.blockedHosts.get(host) || 0) + 1);
@@ -404,6 +411,20 @@ export class JsdomFarm {
     if (!this.cacheDir) return null;
     const name = Buffer.from(url).toString('base64url').slice(0, 160);
     return path.join(this.cacheDir, name);
+  }
+
+  /** Buang aset yang sudah diunduh dari CDN (percobaan warm berikutnya mengunduh ulang). */
+  dropCachedAssets() {
+    let dropped = 0;
+    for (const url of this.cdnFetches) {
+      const p = this.cachePath(url);
+      if (p && fs.existsSync(p)) {
+        try { fs.rmSync(p); dropped++; } catch { /* noop */ }
+      }
+    }
+    this.cdnFetches = [];
+    if (dropped) this.log(`dropped ${dropped} cached asset(s) before retrying warm`);
+    return dropped;
   }
 
   // --- device XHR routing ------------------------------------------------------
@@ -429,8 +450,7 @@ export class JsdomFarm {
     return { kind: 'error', note: 'blocked host ' + host };
   }
 
-  /** Forward one device XHR to the real network; bodies are never logged. */
-  async forwardLive({ method, url, headers, body, action }) {
+  /** Forward one device XHR to the real network; bodies are never logged. */  async forwardLive({ method, url, headers, body, action }) {
     const started = Date.now();
     const clean = {};
     for (const [k, v] of Object.entries(headers || {})) {
@@ -491,11 +511,43 @@ export class JsdomFarm {
 
   // --- lifecycle ---------------------------------------------------------------
 
+  /**
+   * Warm the farm. Failures are retried up to `warmAttempts` times (default 2, env
+   * JSDOM_FARM_WARM_ATTEMPTS) because the warm path is the only networked part:
+   * a flaky Log1, a stalled download or a half-written cached asset should not
+   * leave the farm dead. Each attempt is a fresh DOM — and, in live mode, a fresh
+   * device registration. A genuinely incompatible new SDK build fails all attempts
+   * (that needs a new shim, not a retry); the last error is thrown.
+   */
   async start() {
     if (this.window && this.state === 'warm') return this.marks;
     if (this.window) await this.stop(); // cold but leftover DOM: rebuild cleanly
+    let lastErr = null;
+    for (let attempt = 1; attempt <= this.warmAttempts; attempt++) {
+      try {
+        return await this.warmOnce(attempt);
+      } catch (e) {
+        lastErr = e;
+        this.warmFailures++;
+        this.lastWarmError = { at: Date.now(), attempt, message: String(e?.message || e).slice(0, 300) };
+        this.log(`warm attempt ${attempt}/${this.warmAttempts} failed: ${this.lastWarmError.message}`);
+        // Aset yang datang dari unduhan CDN dibuang: kalau file-nya setengah jadi atau
+        // korup, percobaan berikutnya mengunduh ulang (bukan memakai file rusak selamanya).
+        if (attempt < this.warmAttempts) {
+          this.dropCachedAssets();
+          await this.stop();
+          await sleep(this.warmRetryDelayMs);
+        }
+      }
+    }
+    this.state = 'failed';
+    throw lastErr;
+  }
+
+  async warmOnce(attempt) {
     this.t0 = Date.now();
     this.state = 'starting';
+    this.attempt = attempt;
     const jsdom = resolveJsdom();
     const { JSDOM, VirtualConsole, requestInterceptor } = jsdom;
     if (!JSDOM) throw new Error(`jsdom module has no JSDOM export (keys: ${Object.keys(jsdom || {}).slice(0, 8)})`);
@@ -619,6 +671,7 @@ export class JsdomFarm {
     this.state = 'warm';
     this.warmed = true;
     this.marks.readyMs = Date.now() - this.t0;
+    this.marks.attempt = attempt;
     this.log(`warm (${this.mode}); z_um ready in ${this.marks.readyMs}ms; token probe ${h.probeLen} chars`);
     return this.marks;
   }
@@ -643,8 +696,11 @@ export class JsdomFarm {
       await this.restart();
     }
     if (!this.window || this.state !== 'warm') {
-      if (!this.window) return [];
-      await this.ensureFresh();
+      // Cold (failed/stopped/never started): try to warm again instead of returning [].
+      // The pool calls this from its collector, so a recovered warm heals the farm
+      // without a process restart. Throws when warming keeps failing (the pool logs it).
+      this.warmed = false;
+      await this.start();
     }
     const out = [];
     for (let i = 0; i < count; i++) {
@@ -703,6 +759,8 @@ export class JsdomFarm {
       mode: this.mode,
       state: this.state,
       warmed: this.warmed,
+      warmFailures: this.warmFailures,
+      lastWarmError: this.lastWarmError ? { attempt: this.lastWarmError.attempt, ageSec: Math.round((Date.now() - this.lastWarmError.at) / 1000), message: this.lastWarmError.message } : null,
       feilin: this.feilinBuild ? { build: this.feilinBuild, requested: this.feilinRequested ?? this.feilinBuild, source: this.feilinSource, pinned: (this.pinnedServes || 0) > 0 } : null,
       assetsDir: this.assetsDir,
       minTokenLen: this.minTokenLen,

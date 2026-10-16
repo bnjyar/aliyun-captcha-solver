@@ -203,9 +203,62 @@ await t('isStale() follows the proxy router', () => {
   assert.equal(farm.isStale(), false, 'no proxy: never stale');
 });
 
-await t('harvest() on a stopped farm returns [] instead of throwing', async () => {
+await t('harvest() di farm yang belum pernah warm: mencoba warm dan melempar kalau gagal', async () => {
+  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 1 });
+  farm.warmOnce = async () => { throw new Error('no-jsdom-in-test'); };
+  await assert.rejects(() => farm.harvest(3), /no-jsdom-in-test/);
+  assert.equal(farm.stats().warmFailures, 1);
+});
+
+await t('harvest() memanas-kan ulang farm yang dingin (self-heal), bukan menyerah', async () => {
   const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
-  assert.deepEqual(await farm.harvest(3), []);
+  let started = 0;
+  farm.start = async () => { started++; farm.window = { eval: () => ({ ok: true, value: 'x'.repeat(600) }) }; farm.state = 'warm'; farm.warmed = true; return {}; };
+  const tokens = await farm.harvest(2);
+  assert.equal(started, 1, 'harvest harus mencoba warm saat farm dingin');
+  assert.equal(tokens.length, 2);
+  assert.equal(tokens[0].length, 600);
+  await farm.stop();
+});
+
+await t('warm gagal: dicoba ulang sampai warmAttempts, lalu melempar error terakhir', async () => {
+  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
+  let calls = 0;
+  farm.warmOnce = async (attempt) => { calls++; throw new Error(`gagal ke-${attempt}`); };
+  const err = await farm.start().then(() => null, (e) => e);
+  assert.equal(calls, 3, 'tiga percobaan');
+  assert.match(err.message, /gagal ke-3/, 'error terakhir yang dilempar');
+  assert.equal(farm.stats().warmFailures, 3);
+  assert.equal(farm.stats().lastWarmError.attempt, 3);
+});
+
+await t('warm gagal lalu berhasil: percobaan kedua yang dipakai', async () => {
+  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
+  let calls = 0;
+  farm.warmOnce = async (attempt) => {
+    calls++;
+    if (attempt < 2) throw new Error('Log1 transport error');
+    farm.state = 'warm'; farm.warmed = true; farm.window = {};
+    return { readyMs: 10, attempt };
+  };
+  const marks = await farm.start();
+  assert.equal(calls, 2);
+  assert.equal(marks.attempt, 2);
+  assert.equal(farm.warmed, true);
+  assert.equal(farm.stats().warmFailures, 1, 'kegagalan pertama tetap tercatat');
+});
+
+await t('aset CDN yang diunduh dibuang sebelum retry (unduhan rusak tidak dipakai selamanya)', () => {
+  const cacheDir = path.join(tmp, 'cdn-cache');
+  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', cacheDir });
+  const url = 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin049.deadbeef.js';
+  const p = farm.cachePath(url);
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(p, 'half-written');
+  farm.cdnFetches.push(url);
+  assert.equal(farm.dropCachedAssets(), 1);
+  assert.equal(fs.existsSync(p), false, 'file rusak dibuang');
+  assert.deepEqual(farm.cdnFetches, []);
 });
 
 await t('stats() reports engine/mode/state without tokens', async () => {
