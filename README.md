@@ -52,6 +52,11 @@ opsional. Kalau tidak terpasang di app lo, set `JSDOM_PATH=/path/ke/jsdom`
 `undici` ikut terpasang otomatis, dipakai untuk jalur proxy (lihat di bawah). Butuh
 Node ≥ 20.18.1 (jsdom 30 praktis butuh Node modern; diuji di Node 26).
 
+Kalau solver dipakai lewat `file:` (symlink, bukan dari registry), npm **tidak** memasang
+dependensinya di app pemakai. Jalankan `npm install` di folder solver sendiri. `proxy-direct`
+melakukannya lewat `postinstall`. Untuk tes solver, `playwright-core` dan `jsdom` ada di
+`devDependencies`, jadi `npm install` di sini cukup untuk menjalankan `npm test`.
+
 ## Pakai
 
 ```js
