@@ -6,4 +6,4 @@ export { createAliyunCaptcha, generateArg, encrypt, aliHash } from './aliyun-cap
 export { CaptchaPool } from './captcha-pool.mjs';
 export { TokenFarm } from './token-farm.mjs';
 export { JsdomFarm } from './jsdom-farm.mjs';
-export { ProxyRouter, loadProxyRouter, parseProxyList, parseProxyLine } from './proxy.mjs';
+export { ProxyRouter, loadProxyRouter, parseProxyList, parseProxyLine, proxyFailureReason, transportFailureReason } from './proxy.mjs';

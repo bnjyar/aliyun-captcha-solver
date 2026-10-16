@@ -26,6 +26,15 @@ import { fetch as undiciFetch, ProxyAgent } from 'undici';
 const PROXY_DOWN = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN']);
 // undici's message when a CONNECT through the proxy is refused (407, 403, 5xx).
 const PROXY_REJECTED = /^Proxy response \(\d+\)|^Proxy Authentication Required \(407\)/;
+// The tunnel was up, then the connection broke (a dead/half-dead proxy resets the
+// socket before TLS is even established). Deliberately NOT counted by default —
+// see ProxyRouter's `rotateOnTransportErrors`.
+const TRANSPORT_BROKEN_CODES = new Set([
+  'ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED', 'EHOSTDOWN', 'ENETDOWN',
+  'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+  'ERR_SOCKET_CONNECTION_TIMEOUT', 'ERR_STREAM_PREMATURE_CLOSE',
+]);
+const TRANSPORT_BROKEN_MSG = /socket disconnected|socket hang up|other side closed|premature close|closed before/i;
 // Chrome's proxy-side failures, e.g. "net::ERR_TUNNEL_CONNECTION_FAILED". The
 // timeout family is included: a silent proxy (CONNECT accepted, then no answer)
 // surfaces as net::ERR_TIMED_OUT / net::ERR_CONNECTION_TIMED_OUT. A site-side
@@ -114,6 +123,17 @@ export function chromeProxyFailureReason(message) {
   return CHROME_GOTO_TIMEOUT.test(s) ? 'page load timed out' : null;
 }
 
+// The tunnel was established and then the connection died (reset / premature close).
+// A dead proxy and a flaky target are indistinguishable from one error, which is why
+// ProxyRouter only rotates on these when the caller opts in.
+export function transportFailureReason(err) {
+  for (let e = err, depth = 0; e && depth < 6; e = e.cause, depth++) {
+    if (TRANSPORT_BROKEN_CODES.has(e.code)) return e.code;
+    if (TRANSPORT_BROKEN_MSG.test(e.message ?? '')) return String(e.message).slice(0, 60);
+  }
+  return null;
+}
+
 export class ProxyRouter {
   /**
    * @param {Array<{host:string, port:number, username?:string, password?:string}>} proxies
@@ -123,14 +143,24 @@ export class ProxyRouter {
    *                                             in time and count it as a proxy failure;
    *                                             0 disables the watchdog
    * @param {function} [opts.rotateOn]           (res, url) => reason | null; a string moves to the next proxy
+   * @param {boolean}  [opts.rotateOnTransportErrors=false]
+   *                                             treat a tunnel that breaks mid-connection (ECONNRESET,
+   *                                             socket hang up, undici UND_ERR_SOCKET/…) as a proxy
+   *                                             failure too — rotate and mark `proxyFailure`. Off by
+   *                                             default: a flaky target is indistinguishable from a
+   *                                             dead proxy on the first error, and rotating away from a
+   *                                             healthy proxy costs the sticky IP. Useful with long,
+   *                                             cheap proxy lists where a half-dead entry must not
+   *                                             stall every request.
    * @param {function} [opts.log]                receives one-line messages (never credentials)
    * @param {function} [opts.now=Date.now]       clock, injectable for tests
    */
-  constructor(proxies, { cooldownMs = 300_000, timeoutMs = 60_000, rotateOn = null, log = () => {}, now = Date.now } = {}) {
+  constructor(proxies, { cooldownMs = 300_000, timeoutMs = 60_000, rotateOn = null, rotateOnTransportErrors = false, log = () => {}, now = Date.now } = {}) {
     if (!proxies?.length) throw new Error('ProxyRouter needs at least one proxy');
     this.cooldownMs = cooldownMs;
     this.timeoutMs = timeoutMs;
     this.rotateOn = rotateOn;
+    this.rotateOnTransportErrors = rotateOnTransportErrors;
     this.log = log;
     this.now = now;
     this.entries = proxies.map((p, i) => {
@@ -242,10 +272,13 @@ export class ProxyRouter {
       }
       // An abort from the caller's own signal is not the proxy's fault.
       const reason = init.signal?.aborted ? null : proxyFailureReason(err);
-      if (reason) {
-        this.fail(entry, reason);
+      // A tunnel that broke mid-connection: only counted when the caller opted in.
+      const transport = reason || !this.rotateOnTransportErrors ? null : transportFailureReason(err);
+      if (reason || transport) {
+        const why = reason || transport;
+        this.fail(entry, why);
         // Penanda untuk pemanggil: error ini dari jalur proxy, bukan dari tujuannya.
-        err.proxyFailure = reason;
+        err.proxyFailure = why;
       }
       throw err;
     }

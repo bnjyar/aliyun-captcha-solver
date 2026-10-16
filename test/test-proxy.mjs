@@ -12,6 +12,7 @@ import {
   parseProxyLine,
   parseProxyList,
   proxyFailureReason,
+  transportFailureReason,
 } from '../src/proxy.mjs';
 import { createAliyunCaptcha } from '../src/aliyun-captcha.mjs';
 
@@ -99,6 +100,22 @@ function makeSilentProxy() {
     sock.on('close', () => sockets.delete(sock));
     sock.on('error', () => {});
     // no response on purpose
+  });
+  return { server, sockets, destroy: () => { for (const s of sockets) s.destroy(); } };
+}
+
+// Answers CONNECT with 200 and then kills the tunnel right away — the signature of a
+// half-dead proxy (real one measured 2026-10-16: "Client network socket disconnected
+// before secure TLS connection was established", ECONNRESET).
+function makeHalfDeadProxy() {
+  const sockets = new Set();
+  const server = http.createServer((req, res) => res.end());
+  server.on('connect', (req, sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.on('error', () => {});
+    sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+    setImmediate(() => sock.destroy());
   });
   return { server, sockets, destroy: () => { for (const s of sockets) s.destroy(); } };
 }
@@ -221,6 +238,19 @@ await t('ECONNRESET after the tunnel is up does not count', () => {
   assert.equal(proxyFailureReason(err), null);
 });
 
+await t('transportFailureReason(): a broken tunnel is named, a clean error is not', () => {
+  // Bentuk nyata dari proxy gratis (2026-10-16, diukur dari daftar proxies/all.txt).
+  const halfDead = Object.assign(new TypeError('fetch failed'), {
+    cause: Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' }),
+  });
+  assert.equal(transportFailureReason(halfDead), 'ECONNRESET');
+  assert.equal(transportFailureReason(Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) })), 'ECONNRESET');
+  assert.equal(transportFailureReason(Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })), 'UND_ERR_SOCKET');
+  assert.equal(transportFailureReason(Object.assign(new TypeError('fetch failed'), { cause: new Error('getaddrinfo ENOTFOUND x') })), null, 'DNS bukan transport-break');
+  assert.equal(transportFailureReason(new Error('boom')), null);
+  assert.equal(proxyFailureReason(halfDead), null, 'klasifikasi lama tetap tidak menghitungnya');
+});
+
 await t('Chrome ERR_TUNNEL / ERR_PROXY messages are recognised; plain net errors are not', () => {
   assert.equal(chromeProxyFailureReason('page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://x'), 'ERR_TUNNEL_CONNECTION_FAILED');
   assert.equal(chromeProxyFailureReason('net::ERR_PROXY_CONNECTION_FAILED'), 'ERR_PROXY_CONNECTION_FAILED');
@@ -316,6 +346,36 @@ await t('a proxy-level failure is marked on the error for the caller (proxyFailu
   assert.ok(err.proxyFailure, 'caller can tell a proxy failure from a target failure');
   assert.equal(r.status().active, 2);
   await r.destroy();
+});
+
+await t('half-dead proxy (CONNECT 200 lalu tunnel putus): default TIDAK menghitung, opt-in menghitung', async () => {
+  const half = makeHalfDeadProxy();
+  const halfPort = await listen(half.server);
+
+  // Default: perilaku lama dipertahankan — error naik tanpa proxyFailure, router tidak pindah.
+  const rDefault = mk([entryOf(halfPort, 'u1', SECRET), entryOf(p2Port, 'u2', 'p2-fake')]);
+  const errDefault = await rDefault.fetch(urlOk).catch((e) => e);
+  assert.ok(errDefault, 'request must fail through a half-dead proxy');
+  assert.equal(errDefault.proxyFailure, undefined, 'default: bukan proxyFailure');
+  assert.equal(rDefault.status().active, 1, 'default: router tetap di #1');
+  assert.equal(rDefault.status().failures, 0);
+  await rDefault.destroy();
+
+  // Opt-in: tunnel yang putus dihitung gagal -> pindah proxy, penanda untuk pemanggil.
+  const rOpt = mk([entryOf(halfPort, 'u1', SECRET), entryOf(p2Port, 'u2', 'p2-fake')], { rotateOnTransportErrors: true });
+  const errOpt = await rOpt.fetch(urlOk).catch((e) => e);
+  assert.ok(errOpt.proxyFailure, 'opt-in: caller bisa membedakan kegagalan proxy');
+  assert.match(String(errOpt.proxyFailure), /ECONNRESET|socket/i);
+  assert.equal(rOpt.status().active, 2, 'opt-in: router pindah ke #2');
+  assert.equal(rOpt.status().failures, 1);
+  assert.ok(logs.some((l) => /proxy #1 failed \((ECONNRESET|.*socket.*)\)/i.test(l)), `log menyebut kegagalannya: ${logs.slice(-3)}`);
+  const before = p2.hits.length;
+  assert.equal((await rOpt.fetch(urlOk)).status, 200, 'request berikutnya sukses lewat #2');
+  assert.equal(p2.hits.length, before + 1);
+  await rOpt.destroy();
+
+  half.destroy();
+  await closeServer(half.server);
 });
 
 await t('a slow body is not cut by the watchdog (the timer stops at the headers)', async () => {

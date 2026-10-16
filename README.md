@@ -182,6 +182,14 @@ Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
   setelah tunnel terbentuk tidak dihitung.
 - **`rotateOn(res, url)`** dipanggil untuk setiap respons dari `proxy.fetch`. Paket tidak
   tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
+- **`rotateOnTransportErrors`** (default `false`) — kalau `true`, tunnel yang **putus di
+  tengah koneksi** (`ECONNRESET`, socket hang up, undici `UND_ERR_SOCKET`/timeout body)
+  dihitung sebagai kegagalan proxy juga: router pindah, dan error-nya ditandai
+  `proxyFailure` untuk pemanggil. Default mati karena dari satu error saja proxy mati
+  tidak bisa dibedakan dari target yang goyang, dan memindahkan proxy sehat itu mahal
+  (IP sticky). Nyalakan untuk daftar proxy panjang yang isinya banyak setengah mati:
+  satu entri busuk tidak lagi menahan setiap request. Klasifikasinya:
+  `proxyFailureReason()` (lama, konservatif) dan `transportFailureReason()` (transport).
 - **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
   proxy di konteks yang sedang jalan. Device token yang sudah dipanen sebelum itu tetap
   ada di pool dan tetap bisa dipakai dari IP baru (diuji lintas-IP 2026-10-15: mint dari IP B
@@ -244,7 +252,7 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test                # 83 test: cipher & request shape (14), pool (24), proxy (30),
+npm test                # 86 test: cipher & request shape (14), pool (24), proxy (32),
                         #          farm lewat proxy (3), jsdom farm (12)
 npm run test:solver     # canary rotasi konstanta Aliyun
 ```
