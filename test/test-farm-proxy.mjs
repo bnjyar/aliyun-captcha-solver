@@ -81,7 +81,7 @@ console.log('farm egress through the proxy router');
   const e1 = { index: 1 };
   const e2 = { index: 2 };
   const fakeRouter = { current: () => e1 };
-  const f = new TokenFarm({ url: 'https://farm-test.invalid', prefix: 'no8xfe', region: 'sgp', proxy: fakeRouter, profile: path.join(here, '.tmp-stale-unused') });
+  const f = new TokenFarm({ url: 'https://farm-test.invalid', prefix: 'abc123', region: 'sgp', proxy: fakeRouter, profile: path.join(here, '.tmp-stale-unused') });
   f.launchedProxy = e1;
   f.context = null;
   assert.equal(f.isStale(), false, 'never launched: not stale');
@@ -110,7 +110,7 @@ const router = new ProxyRouter(
 );
 const farm = new TokenFarm({
   url: 'http://farm-test.invalid/', // never resolved: requests go to the proxy
-  prefix: 'no8xfe',
+  prefix: 'abc123',
   profile,
   executablePath: chrome,
   proxy: router,

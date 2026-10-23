@@ -24,7 +24,7 @@ export interface AliyunCaptchaConfig {
   secretKey: string;
   /** Public value from the target site's JS. */
   sceneId: string;
-  /** Tenant prefix, e.g. 'no8xfe'. */
+  /** Tenant prefix, e.g. 'abc123'. */
   prefix: string;
   /** SDK region token, e.g. 'sgp'. Defaults to endpointRegion. */
   region?: string;
@@ -142,7 +142,7 @@ export class TokenFarm {
 }
 
 export interface JsdomFarmOptions {
-  /** Page origin for the SDK. Defaults to https://chat.z.ai. */
+  /** Page origin for the SDK. Defaults to https://example.com. */
   url?: string;
   prefix: string;
   region?: string;

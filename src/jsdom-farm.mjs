@@ -2,7 +2,7 @@
 // runs inside jsdom (Node) and window.z_um.getToken() yields the device tokens.
 //
 // Same contract as TokenFarm (see ./token-farm.mjs):
-//     const farm = new JsdomFarm({ prefix: 'no8xfe', region: 'sgp', proxy });
+//     const farm = new JsdomFarm({ prefix: 'abc123', region: 'sgp', proxy });
 //     await farm.start();               // warms once
 //     const tokens = await farm.harvest(25);
 //
@@ -253,8 +253,8 @@ export function installShims(window, shimUse = new Set()) {
 export class JsdomFarm {
   /**
    * @param {object}  opts
-   * @param {string}  [opts.url]            page origin for the SDK (default https://chat.z.ai)
-   * @param {string}  [opts.prefix]         Aliyun tenant prefix, e.g. 'no8xfe'
+   * @param {string}  [opts.url]            page origin for the SDK (default https://example.com)
+   * @param {string}  [opts.prefix]         Aliyun tenant prefix, e.g. 'abc123'
    * @param {string}  [opts.region]         SDK region token, e.g. 'sgp'
    * @param {'live'|'replay'} [opts.mode]   'live' (default): register the device over the
    *                                        real network; 'replay': answer Log1 from `deviceConfig`
@@ -279,7 +279,7 @@ export class JsdomFarm {
    * @param {boolean} [opts.verbose]
    */
   constructor({
-    url = 'https://chat.z.ai',
+    url = 'https://example.com',
     prefix,
     region = 'sgp',
     mode = 'live',
@@ -771,7 +771,7 @@ export class JsdomFarm {
 }
 
 // CLI check (needs jsdom installed / JSDOM_PATH + a tenant prefix):
-//   JSDOM_PATH=... JSDOM_FARM_ASSETS=... node src/jsdom-farm.mjs --prefix no8xfe --count 3
+//   JSDOM_PATH=... JSDOM_FARM_ASSETS=... node src/jsdom-farm.mjs --prefix abc123 --count 3
 if (import.meta.url === `file://${process.argv[1]}`) {
   const argv = process.argv.slice(2);
   const arg = (name) => {
@@ -779,7 +779,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     return i >= 0 ? argv[i + 1] : undefined;
   };
   const farm = new JsdomFarm({
-    url: arg('url') || 'https://chat.z.ai',
+    url: arg('url') || 'https://example.com',
     prefix: arg('prefix'),
     region: arg('region') || 'sgp',
     mode: arg('mode') || 'live',

@@ -56,7 +56,7 @@ await t('pinFeilin: build apa pun dilayani dari build lokal yang dipin (imun rot
   assert.equal(pickLocalAsset(index, 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin045.x.js', '045').pinned, false, 'build yang sama bukan substitusi');
   assert.equal(pickLocalAsset(index, asked049, '051'), null, 'pin tidak ada di disk: caller yang memutuskan');
   assert.equal(newestFeilinBuild(index), '048');
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', assetsDir: dir, pinFeilin: 'auto' });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', assetsDir: dir, pinFeilin: 'auto' });
   assert.equal(farm.effectivePin(index), '048');
   farm.pinFeilin = null;
   assert.equal(farm.effectivePin(index), null);
@@ -89,15 +89,15 @@ await t('resolveJsdom() points at the real error when jsdom is absent', () => {
 // --- device XHR routing --------------------------------------------------------
 
 await t('live mode forwards device actions, replay mode answers them from the blob', () => {
-  const live = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
+  const live = new JsdomFarm({ prefix: 'abc123', mode: 'live' });
   assert.equal(live.decideXhr('https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com', 'Action=Log1&x=1').kind, 'live');
   assert.equal(live.decideXhr('https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com', 'Action=Log2&x=1').kind, 'live');
   assert.equal(live.decideXhr('https://device.saf.aliyuncs.com', 'Action=Log3').kind, 'live');
-  const blocked = live.decideXhr('https://chat.z.ai/api', '');
+  const blocked = live.decideXhr('https://example.com/api', '');
   assert.equal(blocked.kind, 'error');
-  assert.equal(live.blockedHosts.get('chat.z.ai'), 1, 'blocked hosts are counted');
+  assert.equal(live.blockedHosts.get('example.com'), 1, 'blocked hosts are counted');
 
-  const replay = new JsdomFarm({ prefix: 'no8xfe', mode: 'replay', deviceConfig: 'AAA#BBB' });
+  const replay = new JsdomFarm({ prefix: 'abc123', mode: 'replay', deviceConfig: 'AAA#BBB' });
   const r1 = replay.decideXhr('https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com', 'Action=Log1');
   assert.equal(r1.kind, 'ok');
   assert.equal(JSON.parse(r1.body).ResultObject.DeviceConfig, 'AAA#BBB');
@@ -107,8 +107,8 @@ await t('live mode forwards device actions, replay mode answers them from the bl
 });
 
 await t('replay mode without a DeviceConfig fails fast at construction', () => {
-  assert.throws(() => new JsdomFarm({ prefix: 'no8xfe', mode: 'replay' }), /needs deviceConfig/);
-  assert.throws(() => new JsdomFarm({ prefix: 'no8xfe', mode: 'banana' }), /unknown mode/);
+  assert.throws(() => new JsdomFarm({ prefix: 'abc123', mode: 'replay' }), /needs deviceConfig/);
+  assert.throws(() => new JsdomFarm({ prefix: 'abc123', mode: 'banana' }), /unknown mode/);
 });
 
 // --- live forwarding + audit ---------------------------------------------------
@@ -117,7 +117,7 @@ await t('forwardLive() registers, keeps the blob, strips hop headers, and audits
   const auditDir = path.join(tmp, 'audit');
   const seen = [];
   const farm = new JsdomFarm({
-    prefix: 'no8xfe',
+    prefix: 'abc123',
     mode: 'live',
     auditDir,
     fetchImpl: async (url, init) => {
@@ -143,7 +143,7 @@ await t('forwardLive() registers, keeps the blob, strips hop headers, and audits
 });
 
 await t('a failed live call is recorded, never cached as success', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', fetchImpl: async () => { throw new Error('ECONNRESET'); } });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', fetchImpl: async () => { throw new Error('ECONNRESET'); } });
   await assert.rejects(() => farm.forwardLive({ method: 'POST', url: 'https://cloudauth-device-dualstack.ap-southeast-1.aliyuncs.com', headers: {}, body: 'Action=Log1', action: 'Log1' }), /ECONNRESET/);
   assert.equal(farm.log1, null);
   assert.equal(farm.liveRequests.length, 1);
@@ -153,7 +153,7 @@ await t('a failed live call is recorded, never cached as success', async () => {
 // --- health gate ---------------------------------------------------------------
 
 await t('health() rejects the SDK stub () => "" by length, not by typeof', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live' });
   farm.window = { eval: () => ({ ok: true, type: 'string', len: 0 }) };
   const bad = await farm.health();
   assert.equal(bad.ok, false);
@@ -192,7 +192,7 @@ await t('isStale() follows the proxy router', () => {
   const e1 = { index: 1 };
   const e2 = { index: 2 };
   const fakeRouter = { current: () => e1 };
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', proxy: fakeRouter });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', proxy: fakeRouter });
   assert.equal(farm.isStale(), false, 'never launched: not stale');
   farm.window = {};
   farm.launchedProxy = e1;
@@ -204,14 +204,14 @@ await t('isStale() follows the proxy router', () => {
 });
 
 await t('harvest() di farm yang belum pernah warm: mencoba warm dan melempar kalau gagal', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 1 });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', warmAttempts: 1 });
   farm.warmOnce = async () => { throw new Error('no-jsdom-in-test'); };
   await assert.rejects(() => farm.harvest(3), /no-jsdom-in-test/);
   assert.equal(farm.stats().warmFailures, 1);
 });
 
 await t('harvest() memanas-kan ulang farm yang dingin (self-heal), bukan menyerah', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live' });
   let started = 0;
   farm.start = async () => { started++; farm.window = { eval: () => ({ ok: true, value: 'x'.repeat(600) }) }; farm.state = 'warm'; farm.warmed = true; return {}; };
   const tokens = await farm.harvest(2);
@@ -222,7 +222,7 @@ await t('harvest() memanas-kan ulang farm yang dingin (self-heal), bukan menyera
 });
 
 await t('warm gagal: dicoba ulang sampai warmAttempts, lalu melempar error terakhir', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
   let calls = 0;
   farm.warmOnce = async (attempt) => { calls++; throw new Error(`gagal ke-${attempt}`); };
   const err = await farm.start().then(() => null, (e) => e);
@@ -233,7 +233,7 @@ await t('warm gagal: dicoba ulang sampai warmAttempts, lalu melempar error terak
 });
 
 await t('warm gagal lalu berhasil: percobaan kedua yang dipakai', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', warmAttempts: 3, warmRetryDelayMs: 0 });
   let calls = 0;
   farm.warmOnce = async (attempt) => {
     calls++;
@@ -250,7 +250,7 @@ await t('warm gagal lalu berhasil: percobaan kedua yang dipakai', async () => {
 
 await t('aset CDN yang diunduh dibuang sebelum retry (unduhan rusak tidak dipakai selamanya)', () => {
   const cacheDir = path.join(tmp, 'cdn-cache');
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live', cacheDir });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live', cacheDir });
   const url = 'https://g.alicdn.com/captcha-frontend/FeiLin/1.5.2/feilin049.deadbeef.js';
   const p = farm.cachePath(url);
   fs.mkdirSync(cacheDir, { recursive: true });
@@ -262,7 +262,7 @@ await t('aset CDN yang diunduh dibuang sebelum retry (unduhan rusak tidak dipaka
 });
 
 await t('stats() reports engine/mode/state without tokens', async () => {
-  const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'live' });
+  const farm = new JsdomFarm({ prefix: 'abc123', mode: 'live' });
   farm.liveRequests.push({ action: 'Log1', ok: true, status: 200, code: '200', ms: 120 });
   farm.feilinBuild = '048';
   farm.feilinRequested = '048';
@@ -288,7 +288,7 @@ await t('stats() reports engine/mode/state without tokens', async () => {
   } else {
     await t('full offline warm-up: SDK boots in jsdom and mints tokens (replay mode)', async () => {
       const blob = fs.readFileSync(fixture, 'utf8').trim();
-      const farm = new JsdomFarm({ prefix: 'no8xfe', mode: 'replay', deviceConfig: blob, assetsDir: assets, cacheDir: path.join(tmp, 'cdn') });
+      const farm = new JsdomFarm({ prefix: 'abc123', mode: 'replay', deviceConfig: blob, assetsDir: assets, cacheDir: path.join(tmp, 'cdn') });
       try {
         const marks = await farm.start();
         assert.ok(marks.readyMs > 0);

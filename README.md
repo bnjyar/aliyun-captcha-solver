@@ -1,48 +1,51 @@
 # aliyun-captcha-solver
 
-Solver captcha Alibaba (FeiLin / Aliyun Captcha 2.0) yang jalan **penuh di Node** —
-tanpa layanan solver berbayar dan tanpa puzzle slider.
+[![test](https://github.com/bnjyar/aliyun-captcha-solver/actions/workflows/test.yml/badge.svg)](https://github.com/bnjyar/aliyun-captcha-solver/actions/workflows/test.yml)
 
-Generik: bukan khusus satu platform. Yang platform-specific cuma **konfigurasi tenant**
-(AccessKey, SceneId, prefix, region) dan **situs tempat device token dipanen** —
-keduanya lo kasih lewat config, bukan di-hardcode.
+An Alibaba captcha solver (FeiLin / Aliyun Captcha 2.0) that runs **entirely in
+Node** — no paid solving service and no slider puzzle.
+
+Generic by design: nothing is hardcoded to a platform. Only the **tenant
+configuration** (AccessKey, SceneId, prefix, region) and the **site the device
+token is harvested from** are site-specific, and both come from config.
 
 ```
-tab browser (warm)  →  device token  →  CaptchaPool  →  captcha_verify_param
-       (satu-satunya sumbangan browser)      (Node murni)
+warm browser tab  →  device token  →  CaptchaPool  →  captcha_verify_param
+  (the browser's only contribution)      (pure Node)
 ```
 
-Farm device token punya **dua engine** dengan kontrak yang sama (`start`/`harvest`/
-`isStale`/`restart`/`stop`):
+The device-token farm ships with **two engines** sharing one contract
+(`start` / `harvest` / `isStale` / `restart` / `stop`):
 
-| Engine | Kelas | Butuh | Catatan |
+| Engine | Class | Needs | Notes |
 |---|---|---|---|
-| Chrome headless (default) | `TokenFarm` | playwright-core + profil Chrome | tab hangat; bukti live paling matang |
-| Node + jsdom (**tanpa Chrome**) | `JsdomFarm` | jsdom + aset SDK | SDK AliyunCaptcha.js **jalan di jsdom**, registrasi device (Log1) lewat jaringan dari Node; token lolos Verify live (T001) — lihat riset H13 di repo `zai` |
+| Headless Chrome (default) | `TokenFarm` | playwright-core + a Chrome profile | warm tab; the most battle-tested path |
+| Node + jsdom (**no Chrome**) | `JsdomFarm` | jsdom + SDK assets | `AliyunCaptcha.js` runs inside jsdom; device registration (`Log1`) goes to the network from Node; tokens pass live Verify |
 
-## Batasan & penggunaan
+## Scope and acceptable use
 
-- Cakupan: **hanya Aliyun Captcha 2.0 (FeiLin) dengan challenge `TRACELESS`**. Bukan
-  reCAPTCHA/hCaptcha/Turnstile, bukan image grid, bukan slider.
-- Lisensi MIT (lihat `LICENSE`), tanpa jaminan apa pun.
-- Pakai hanya pada sistem yang lo punya izin untuk uji atau otomasi. Membuat param
-  captcha bisa melanggar ToS layanan target dan hukum setempat; tanggung jawab ada
-  di pemakai.
+- Scope: **Aliyun Captcha 2.0 (FeiLin) with the `TRACELESS` challenge only**. Not
+  reCAPTCHA/hCaptcha/Turnstile, not an image grid, not a slider.
+- MIT licensed (see [`LICENSE`](LICENSE)), no warranty of any kind.
+- Use this only on systems you are authorized to test or automate. Minting captcha
+  params may violate the target service's terms and local law; you are responsible
+  for how you use it.
 
-## Prinsip
+## How it works
 
-Risk engine Aliyun tidak memeriksa client saat verifikasi — trust terbentuk saat
-*minting*. Jadi satu-satunya andalan browser adalah **device token**, yang dipanen
-dari satu tab yang hangat via `window.z_um.getToken()`. Setelah itu
-Init/Verify/pembuatan parameter semuanya jalan di Node.
+The Aliyun risk engine does not inspect the client at verification time — trust is
+established when the token is *minted*. The browser's only job is therefore the
+**device token**, harvested from one warm tab via `window.z_um.getToken()`. After
+that, Init, Verify and param construction all run in Node.
 
-`JsdomFarm` menghapus tab itu: SDK dijalankan di jsdom, dan `z_um.getToken()` tetap
-komputasi lokal di dalam dokumen (nol request per token) — yang lewat jaringan hanya
-warm-up (`Log1` registrasi + `Log2`/`Log3` upload fingerprint).
+`JsdomFarm` removes even that tab: the SDK runs inside jsdom, and
+`z_um.getToken()` remains a local computation inside the document (zero requests
+per token). Only warm-up touches the network (`Log1` registration plus
+`Log2`/`Log3` fingerprint upload).
 
-Konsekuensi yang harus lo terima: **butuh satu farm per situs**. Device token
-berformat `SG_WEB#<fp>...` dari cloudauth dan kemungkinan besar ter-scope ke
-tenant, jadi token dari situs A belum tentu valid untuk tenant B.
+One consequence you have to accept: **one farm per site**. Device tokens look like
+`SG_WEB#<fp>...` and come from cloudauth; they are most likely tenant-scoped, so a
+token from site A is not necessarily valid for tenant B.
 
 ## Install
 
@@ -50,173 +53,184 @@ tenant, jadi token dari situs A belum tentu valid untuk tenant B.
 npm install aliyun-captcha-solver
 ```
 
-`playwright-core` cuma dibutuhkan kalau lo pakai `TokenFarm`. Ini peer dependency
-opsional — Kalau sudah ada di app lo, resolve otomatis. Kalau tidak, set
-`PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json`.
+`playwright-core` is only needed for `TokenFarm`. It is an optional peer
+dependency: if your app already has it, it resolves automatically. Otherwise set
+`PLAYWRIGHT_CORE_PATH=/path/to/playwright-core/package.json`.
 
-Chrome dicari otomatis: `CHROME_PATH` → lokasi umum di Linux, macOS, dan Windows
-(atau `opts.executablePath`). Tanpa semuanya, Playwright yang mencoba resolve.
-User agent diturunkan dari **versi Chrome yang benar-benar jalan** dan OS host,
-jadi UA tidak lagi bertentangan dengan fingerprint browser. `CHROME_MAJOR_VERSION`
-bisa dipakai untuk menimpa deteksi versi (berguna di container read-only).
+Chrome is discovered automatically: `CHROME_PATH` → the well-known locations on
+Linux, macOS and Windows → Playwright's own resolution (or pass
+`opts.executablePath`). The user agent is derived from the **browser version
+actually running** and the host OS, so it never contradicts the browser's own
+fingerprint. `CHROME_MAJOR_VERSION` can override version detection (handy in a
+read-only container).
 
-`jsdom` (>= 30) cuma dibutuhkan kalau lo pakai `JsdomFarm` — juga peer dependency
-opsional. Kalau tidak terpasang di app lo, set `JSDOM_PATH=/path/ke/jsdom`
-(direktori paket atau `package.json`-nya).
+`jsdom` (>= 30) is only needed for `JsdomFarm` — also an optional peer dependency.
+If it is not installed in your app, set `JSDOM_PATH=/path/to/jsdom` (the package
+directory or its `package.json`).
 
-`undici` ikut terpasang otomatis, dipakai untuk jalur proxy (lihat di bawah). Butuh
-Node ≥ 20.18.1 (jsdom 30 praktis butuh Node modern; diuji di Node 26).
+`undici` is installed automatically and is used for the proxy path (see below).
+Requires Node >= 20.18.1 (jsdom 30 realistically needs a modern Node; tested on
+Node 26).
 
-Kalau solver dipakai lewat `file:` (symlink, bukan dari registry), npm **tidak** memasang
-dependensinya di app pemakai. Jalankan `npm install` di folder solver sendiri. `proxy-direct`
-melakukannya lewat `postinstall`. Untuk tes solver, `playwright-core` dan `jsdom` ada di
-`devDependencies`, jadi `npm install` di sini cukup untuk menjalankan `npm test`.
+When the solver is consumed through `file:` (a symlink rather than the registry),
+npm does **not** install its dependencies in the consuming app. Run `npm install`
+in the solver folder itself; a `postinstall` hook in the host app is a common way
+to automate that. For the solver's own tests, `playwright-core` and `jsdom` are
+`devDependencies`, so `npm install` here is enough to run `npm test`.
 
-## Pakai
+## Usage
 
-TypeScript: deklarasi tipe untuk entry root ikut terkirim (`src/index.d.ts`).
+TypeScript declarations for the root entry ship with the package
+(`src/index.d.ts`).
 
 ```js
 import { createAliyunCaptcha, CaptchaPool, TokenFarm } from 'aliyun-captcha-solver';
 
-// 1. Klien untuk satu tenant
+// 1. Client for one tenant
 const captcha = createAliyunCaptcha({
   accessKey: process.env.ALIYUN_ACCESS_KEY,
   secretKey: process.env.ALIYUN_SECRET_KEY,
-  sceneId:   'didk33e0',        // nilai publik, ada di JS situs target
-  prefix:    'no8xfe',
-  region:    'sgp',             // token region SDK (window.AliyunCaptchaConfig)
-  endpointRegion: 'southeast',  // token region DNS di hostname
-  // log: (msg) => console.log(msg), // opsional: durasi tiap mint, Init dan Verify dipisah
+  sceneId:   'your-scene-id',   // public value, found in the target site's JS
+  prefix:    'your-prefix',
+  region:    'sgp',             // SDK region token (window.AliyunCaptchaConfig)
+  endpointRegion: 'southeast',  // DNS region token in the hostname
+  // challengePolicy: 'warn',   // 'warn' (default) or 'throw'
+  // log: (msg) => console.log(msg), // optional: per-mint timing, Init and Verify split
 });
 
-// 2. Farm device token (butuh browser)
+// 2. Device-token farm (needs a browser)
 const farm = new TokenFarm({
-  url: 'https://chat.z.ai',
-  prefix: 'no8xfe',
+  url: 'https://target.example',
+  prefix: 'your-prefix',
   region: 'sgp',
-  profile: '/path/ke/chrome-profile',
+  profile: '/path/to/chrome-profile', // null = ephemeral context
   verbose: true,
 });
 await farm.start();
 
-// 3. Pool param warm dengan pacing + backoff
+// 3. Warm param pool with pacing + backoff
 const pool = new CaptchaPool({ captcha, verbose: true });
 pool.setCollector(() => farm.harvest(25));
 await pool.start();
 
-const param = await pool.get(30_000); // captcha_verify_param, atau null
+const param = await pool.get(30_000); // captcha_verify_param, or null
 ```
 
-Kalau cuma butuh param sekali tanpa browser, semua bisa lewat
-`captcha.computeCaptchaParam(deviceToken)` langsung.
+If you only need one param and already have a device token, skip the browser
+entirely and call `captcha.computeCaptchaParam(deviceToken)`.
 
-## Farm tanpa Chrome (`JsdomFarm`)
+## The Chrome-free farm (`JsdomFarm`)
 
-Drop-in untuk `TokenFarm`: SDK AliyunCaptcha.js dijalankan di dalam jsdom, dan
-registrasi device (Log1) ikut dikirim dari Node — **tidak ada Chrome di mana pun**.
+A drop-in replacement for `TokenFarm`: `AliyunCaptcha.js` runs inside jsdom and
+device registration (`Log1`) is sent from Node — **there is no Chrome anywhere**.
 
 ```js
 import { createAliyunCaptcha, CaptchaPool, JsdomFarm, loadProxyRouter } from 'aliyun-captcha-solver';
 
-const proxy = loadProxyRouter('/path/ke/proxies.txt', { cooldownMs: 300_000, timeoutMs: 20_000 });
+const proxy = loadProxyRouter('/path/to/proxies.txt', { cooldownMs: 300_000, timeoutMs: 20_000 });
 const farm = new JsdomFarm({
-  url: 'https://situs-target.tld',   // origin halaman (SDK tidak butuh JS situs)
-  prefix: 'no8xfe',
+  url: 'https://target.example',     // page origin (the SDK does not need the site's JS)
+  prefix: 'your-prefix',
   region: 'sgp',
-  proxy,                              // semua egress farm lewat proxy aktif
-  assetsDir: '/path/ke/aset-sdk',     // opsional: AliyunCaptcha.js + feilin*.js dari disk
-  cacheDir: '/path/ke/cache',         // opsional: cache aset CDN
+  proxy,                              // every farm egress leaves through the active proxy
+  assetsDir: '/path/to/sdk-assets',   // optional: AliyunCaptcha.js + feilin*.js from disk
+  cacheDir: '/path/to/cache',         // optional: CDN asset cache
   verbose: true,
 });
-await farm.start();                   // ~2-8 dtk (Log1 + aset + feilin)
-const tokens = await farm.harvest(25); // string[] (sama seperti TokenFarm)
+await farm.start();                    // ~2-8 s (Log1 + assets + feilin)
+const tokens = await farm.harvest(25); // string[] (same as TokenFarm)
 
 const pool = new CaptchaPool({ captcha });
 pool.setCollector(() => farm.harvest(25));
 ```
 
-Env yang dikenal (opsional, sama artinya dengan opsi di atas):
-`JSDOM_PATH` (lokasi jsdom), `JSDOM_FARM_ASSETS` (dir aset SDK),
-`JSDOM_FARM_CACHE` (cache unduhan CDN; default `~/.cache/aliyun-captcha-solver/jsdom-assets`).
+Recognised environment variables (optional, same meaning as the options above):
+`JSDOM_PATH` (jsdom location), `JSDOM_FARM_ASSETS` (SDK asset directory),
+`JSDOM_FARM_CACHE` (CDN download cache; defaults to
+`~/.cache/aliyun-captcha-solver/jsdom-assets`).
 
-Aturan jaringan:
+Network rules:
 
-- **Mode `live` (default)** — XHR device di dalam halaman (`Log1` registrasi,
-  `Log2`/`Log3` upload fingerprint) diteruskan ke jaringan asli lewat `fetchImpl`
-  (= `proxy.fetch` kalau `proxy` diberikan). `auditDir` bisa diisi untuk menyimpan
-  request/response mentah saat debug.
-- **Mode `replay`** — `Log1` dijawab dari `deviceConfig` yang dikasih (hasil capture
-  sebelumnya); sepenuhnya offline. Untuk tes/debug.
-- Sub-resource: dari `assetsDir`; yang tidak ada di sana di-fetch statis dari
-  `*.alicdn.com` (build FeiLin bisa berotasi kapan saja — `DeviceConfig` yang
-  menentukan) lalu dicache. Host lain diblokir.
-- `z_um.getToken()` sendiri **tidak menyentuh jaringan** (komputasi lokal SDK).
+- **`live` mode (default)** — in-page device XHRs (`Log1` registration,
+  `Log2`/`Log3` fingerprint upload) are forwarded to the real network through
+  `fetchImpl` (= `proxy.fetch` when `proxy` is given). Set `auditDir` to dump raw
+  request/response pairs while debugging.
+- **`replay` mode** — `Log1` is answered from a supplied `deviceConfig` blob
+  (captured earlier); fully offline. For tests and debugging.
+- Sub-resources: served from `assetsDir`; anything missing there is fetched
+  statically from `*.alicdn.com` (the FeiLin build can rotate at any time — the
+  `DeviceConfig` decides which one) and then cached. Every other host is blocked.
+- `z_um.getToken()` itself **never touches the network** (local SDK computation).
 
-Catatan operasional:
+Operational notes:
 
-- **Warm di-retry** (`warmAttempts`, default 2; env `JSDOM_FARM_WARM_ATTEMPTS`). Tiap percobaan =
-  DOM baru (+ registrasi Log1 baru di mode live), dan aset hasil unduhan CDN dibuang dulu supaya
-  unduhan setengah jadi tidak dipakai selamanya. Farm yang dingin **memanas-kan diri** di
-  `harvest()` berikutnya (jalur kolektor pool), jadi kegagalan sementara tidak mematikan farm
-  permanen; `stats().warmFailures`/`lastWarmError` menunjukkan penyebabnya. Retry **tidak**
-  menolong kalau build SDK baru memang butuh API yang belum di-shim — itu perbaikan shim, dan
-  memang tidak ada jalan "turun build" (server menandai downgrade: F001).
-- **Health check berbasis panjang token.** Kalau registrasi gagal, SDK memasang
-  stub `z_um.getToken = () => ""` tanpa error — `start()` menolak token di bawah
-  `minTokenLen` (default 500) dan (mode live) menolak Log1 yang bukan
-  `Code 200` + `DeviceConfig`.
-- **Build FeiLin mengikuti server.** `DeviceConfig.version` menentukan build yang dimuat;
-  yang tidak ada di `assetsDir` di-fetch statis dari CDN lalu dicache. **Jangan pin build
-  untuk registrasi segar** — server mengikat build ke registrasi yang ia terbitkan dan
-  menandai downgrade (F001; diukur 2026-10-16). `pinFeilin` hanya untuk sesi dengan
-  identitas registrasi lama (mode replay). Build yang dipakai terlihat di `stats().feilin`
-  (dan `/healthz` pemanggil, mis. `farmFeilin`).
-- **feilin 1.5.2/048** membaca global `Worker` di ekspresi obfuscated yang jalan
-  sinkron di jalur `getToken`. jsdom tidak punya `Worker`, jadi farm memasang
-  **penanda read-only** (`!Worker` → false seperti browser; `new Worker(...)`
-  melempar eksplisit, bukan hang diam-diam).
-- `pinFeilin` ('045' atau 'auto') melayani SEMUA permintaan FeiLin dari build lokal tertentu —
-  mekanismenya bekerja, tapi untuk registrasi segar server menolak downgrade (F001, diukur
-  2026-10-16). Pakai hanya kalau identitas registrasi memang dari era build itu (replay).
-- `restart()` membangun ulang DOM = konteks device baru (dan Log1 baru di mode
-  live). `isStale()` mengikuti router proxy seperti `TokenFarm`.
-- Fingerprint jsdom lebih miskin dari Chrome (canvas/WebGL/audio hanya shim, tanpa
-  paket `canvas` nyata); token tetap diterima Verify live (bukti T001 di riset H13),
-  tapi ini kandidat perbaikan kalau kelak muncul F001.
+- **Warm-up is retried** (`warmAttempts`, default 2; env
+  `JSDOM_FARM_WARM_ATTEMPTS`). Each attempt builds a fresh DOM (plus a fresh
+  `Log1` registration in live mode) and drops CDN-downloaded assets first, so a
+  half-written download is never reused forever. A cold farm **re-warms itself**
+  on the next `harvest()` (the pool's collector path), so a transient failure does
+  not kill it permanently; `stats().warmFailures` / `lastWarmError` show the cause.
+  Retrying does **not** help when a new SDK build genuinely needs an API that is
+  not shimmed yet — that is a shim fix, and there is no "downgrade build" path (the
+  server flags downgrades as `F001`).
+- **Token-length health check.** If registration fails, the SDK installs a
+  `z_um.getToken = () => ""` stub without raising an error — `start()` rejects
+  tokens shorter than `minTokenLen` (default 500) and, in live mode, rejects a
+  `Log1` that is not `Code 200` + `DeviceConfig`.
+- **The FeiLin build follows the server.** `DeviceConfig.version` decides which
+  build is loaded; one that is not in `assetsDir` is fetched statically from the
+  CDN and cached. **Do not pin a build for a fresh registration** — the server
+  binds the build to the registration it issued and flags downgrades (`F001`,
+  measured during development). `pinFeilin` is only for sessions that reuse an
+  older registration identity (`replay` mode). The build in use is visible in
+  `stats().feilin` (and in a caller's `/healthz`, for example).
+- **feilin 1.5.2/048** reads the global `Worker` inside obfuscated expressions that
+  run synchronously on the `getToken` path. jsdom has no `Worker`, so the farm
+  installs a **read-only marker** (`!Worker` → false, like a browser;
+  `new Worker(...)` throws explicitly instead of hanging silently).
+- `pinFeilin` (`'045'` or `'auto'`) serves EVERY FeiLin request from one local
+  build — the mechanism works, but fresh registrations are rejected as downgrades
+  (`F001`). Use it only when the registration identity really comes from that build
+  era (`replay`).
+- `restart()` rebuilds the DOM = a new device context (and a new `Log1` in live
+  mode). `isStale()` follows the proxy router exactly like `TokenFarm`.
+- A jsdom fingerprint is poorer than Chrome's (canvas/WebGL/audio are shims only,
+  with no real `canvas` package). Tokens still pass live Verify, but this is the
+  first candidate to improve if `F001` ever appears.
 
-## Tantangan non-traceless (slider)
+## Non-traceless challenges (slider)
 
-Solver ini hanya membangun param untuk challenge **TRACELESS** (tanpa slider):
-`TrackList` sengaja kosong. `InitCaptchaV3` mengembalikan `CaptchaType`; kalau
-server menerbitkan tipe lain, Verify akan menolak dan penyebabnya jadi kabur.
+This solver only builds the param for the **`TRACELESS`** challenge (no slider):
+its `TrackList` is intentionally empty. `InitCaptchaV3` reports the challenge it
+issued as `CaptchaType`; if the server issues another type, Verify rejects the
+param and the reason is easy to miss.
 
-`createAliyunCaptcha({ challengePolicy })` mengatur reaksinya:
+`createAliyunCaptcha({ challengePolicy })` controls the reaction:
 
-| Nilai | Perilaku |
+| Value | Behaviour |
 |---|---|
-| `'warn'` (default) | Catat satu baris log lalu lanjut. Tidak pernah memblokir mint. |
-| `'throw'` | Lempar `CHALLENGE_NOT_TRACELESS` sebelum Verify, menghemat satu panggilan ber-pacing. |
+| `'warn'` (default) | Log one line and continue. Never blocks a mint. |
+| `'throw'` | Throw `CHALLENGE_NOT_TRACELESS` before Verify, saving one paced call. |
 
-Default `warn` karena daftar lengkap nilai `CaptchaType` lintas tenant belum
-dipetakan; memblokir berdasarkan tebakan bisa mematikan setup yang sebenarnya
-jalan. Kalau lo sudah melihat sendiri nilai yang keluar di tenant lo, nyalakan
-`'throw'`. Respons Init terakhir selalu ada di `captcha.lastInit` (termasuk
-`CaptchaType`), dan `pool.stats().lastError.captchaType` menyimpan yang terakhir
-gagal.
+The default is `warn` because the full set of `CaptchaType` values across tenants
+is not mapped; blocking on a guess could kill a setup that actually works. Once
+you have observed the values your tenant returns, switch to `'throw'`. The last
+Init response is always available as `captcha.lastInit` (including
+`CaptchaType`), and `pool.stats().lastError.captchaType` keeps the last failing
+one.
 
-## Proxy keluar (opsional)
+## Outbound proxy (optional)
 
-Lo bisa kasih satu daftar proxy HTTP ke paket ini. Request yang dikirim paket, yaitu
-Init dan Verify Aliyun serta Chrome farm, lewat proxy aktif yang sama:
+You can give the package one HTTP proxy list. Requests the package sends — Aliyun
+Init and Verify, plus the Chrome farm — leave through the same active proxy:
 
 ```js
 import { createAliyunCaptcha, TokenFarm, loadProxyRouter } from 'aliyun-captcha-solver';
 
-const proxy = loadProxyRouter('/path/ke/proxies.txt', {
+const proxy = loadProxyRouter('/path/to/proxies.txt', {
   cooldownMs: 300_000,
-  timeoutMs: 60_000,         // proxy diam tanpa header respons dihitung gagal; 0 = mati
-  rotateOn: null,            // (res, url) => alasan | null; string = pindah proxy
+  timeoutMs: 60_000,         // a silent proxy (no response headers) counts as failed; 0 = off
+  rotateOn: null,            // (res, url) => reason | null; a string moves to the next proxy
   log: console.log,
 });
 
@@ -224,123 +238,128 @@ const captcha = createAliyunCaptcha({ /* ... */, proxy });
 const farm = new TokenFarm({ /* ... */, proxy });
 ```
 
-Format daftar, satu per baris (baris kosong dan `#` diabaikan):
-`host:port:user:pass` (ekspor Webshare), `user:pass@host:port`, atau `host:port`.
-Hanya HTTP (CONNECT). Pesan error menyebut nomor baris, tidak pernah isinya.
+List format, one per line (blank lines and `#` are ignored): `host:port:user:pass`
+(a typical proxy-provider export), `user:pass@host:port`, or `host:port`. HTTP
+(CONNECT) only. Error messages name the line number, never its contents.
 
-- **Sticky.** Satu proxy dipakai sampai gagal. Lalu pindah ke proxy berikutnya, dan
-  yang gagal didinginkan selama `cooldownMs`. Init dan Verify harus keluar dari IP yang
-  sama, jadi tidak ada rotasi per request.
-- **Yang dihitung gagal:** proxy tidak bisa dihubungi (`ECONNREFUSED` dan sejenisnya),
-  CONNECT ditolak (407, 403, 5xx), tidak ada header respons sampai `timeoutMs` (proxy yang
-  menerima koneksi lalu diam), atau Chrome melaporkan `ERR_PROXY_*` / `ERR_TUNNEL_*` /
-  timeout (`ERR_TIMED_OUT`, halaman tidak selesai dimuat).
-  Pemanggil yang menyerah menunggu header dengan `AbortSignal.timeout()` (httpPost Aliyun)
-  dihitung sama dengan `timeoutMs`: proxy diam. Abort biasa dari pemanggil dan error TLS
-  setelah tunnel terbentuk tidak dihitung.
-- **`rotateOn(res, url)`** dipanggil untuk setiap respons dari `proxy.fetch`. Paket tidak
-  tahu status atau host mana yang berarti diblokir. Keputusan itu tetap di pemanggil.
-- **`rotateOnTransportErrors`** (default `false`) — kalau `true`, tunnel yang **putus di
-  tengah koneksi** (`ECONNRESET`, socket hang up, undici `UND_ERR_SOCKET`/timeout body)
-  dihitung sebagai kegagalan proxy juga: router pindah, dan error-nya ditandai
-  `proxyFailure` untuk pemanggil. Default mati karena dari satu error saja proxy mati
-  tidak bisa dibedakan dari target yang goyang, dan memindahkan proxy sehat itu mahal
-  (IP sticky). Nyalakan untuk daftar proxy panjang yang isinya banyak setengah mati:
-  satu entri busuk tidak lagi menahan setiap request. Klasifikasinya:
-  `proxyFailureReason()` (lama, konservatif) dan `transportFailureReason()` (transport).
-- **Farm** diluncurkan ulang saat proxy aktif berganti, karena Chrome tidak bisa ganti
-  proxy di konteks yang sedang jalan. Device token yang sudah dipanen sebelum itu tetap
-  ada di pool dan tetap bisa dipakai dari IP baru (diuji lintas-IP 2026-10-15: mint dari IP B
-  dengan token dari IP A sukses dan paramnya diterima). Kalau peluncuran gagal karena proxy
-  (misalnya proxy mati), `start()` mencoba
-  proxy berikutnya, sebanyak jumlah proxy di daftar. Kegagalan lain dilempar seperti biasa.
-- **Tanpa `proxy`**, perilakunya sama seperti sebelumnya: koneksi langsung dan fetch global.
-- `proxy.fetch(url, init)` bisa dipakai pemanggil untuk request lain lewat proxy yang sama.
-  `proxy.status()` untuk diagnosis.
+- **Sticky.** One proxy is used until it fails, then the next one is selected and
+  the failed entry cools down for `cooldownMs`. Init and Verify must leave from
+  the same IP, so there is no per-request rotation.
+- **Counted as failures:** the proxy cannot be reached (`ECONNREFUSED` and
+  friends), CONNECT is refused (407, 403, 5xx), no response headers arrive within
+  `timeoutMs` (the proxy accepts the connection then goes silent), or Chrome
+  reports `ERR_PROXY_*` / `ERR_TUNNEL_*` / a timeout (`ERR_TIMED_OUT`, page never
+  finishes loading). A caller that gives up waiting for headers via
+  `AbortSignal.timeout()` (the Aliyun `httpPost`) is treated like `timeoutMs`: a
+  silent proxy. A plain caller abort and a TLS error after the tunnel is
+  established are not counted.
+- **`rotateOn(res, url)`** runs for every response from `proxy.fetch`. The package
+  does not know which status or host means "blocked"; that decision stays with the
+  caller.
+- **`rotateOnTransportErrors`** (default `false`) — when `true`, a tunnel that
+  **breaks mid-connection** (`ECONNRESET`, socket hang up, undici
+  `UND_ERR_SOCKET`/body timeout) also counts as a proxy failure: the router moves
+  on and the error is marked `proxyFailure` for the caller. Off by default because
+  a single error cannot distinguish a dead proxy from a flaky target, and moving
+  away from a healthy proxy is expensive (sticky IP). Turn it on for long, cheap
+  lists full of half-dead entries: one bad entry no longer stalls every request.
+  The classifiers are `proxyFailureReason()` (older, conservative) and
+  `transportFailureReason()` (transport-level).
+- **The farm** relaunches when the active proxy changes, because Chrome cannot
+  switch proxies on a live context. Device tokens harvested beforehand stay in the
+  pool and remain usable from the new IP (tested across IPs: minting from IP B with
+  a token from IP A succeeds and the param is accepted). If a launch fails because
+  of the proxy (a dead proxy, for example), `start()` tries the next proxy, up to
+  the number of entries in the list. Other failures are thrown as usual.
+- **Without `proxy`**, behaviour is unchanged: direct connections and global
+  `fetch`.
+- `proxy.fetch(url, init)` is available for your own requests through the same
+  proxy. `proxy.status()` is for diagnostics.
 
-## Yang generalisasi, yang tidak
+## What generalizes, what does not
 
-| Komponen | Cakupan | Catatan |
+| Component | Coverage | Notes |
 |---|---|---|
-| Protokol RPC + signing HMAC-SHA1 | ✅ **Global** — seluruh Aliyun Captcha 2.0 cloud | Hanya hostname berubah, dan itu otomatis diturunkan dari `prefix` + `endpointRegion` |
-| Konstanta cipher (`argConstant`, `encryptKey`, perm-table) | ⚠️ **Per-SDK-build** | Terbukti lintas-scene dalam satu tenant. Tenant lain bisa punya build berbeda → verifikasi per tenant. Guard: `npm run test:solver` |
-| Device token (`z_um.getToken()`) | ⚠️ **Per-tenant-ish** | `TokenFarm`: tab di origin situs target. `JsdomFarm`: jsdom + aset SDK + registrasi Log1 dari Node |
-| Jalur proxy keluar (`proxy`) | ✅ **Global** — sama untuk semua situs | Pilihan "status apa berarti diblokir" ada di pemanggil (`rotateOn`) |
+| RPC protocol + HMAC-SHA1 signing | ✅ **Global** — the whole Aliyun Captcha 2.0 cloud | Only the hostname changes, and it is derived automatically from `prefix` + `endpointRegion` |
+| Cipher constants (`argConstant`, `encryptKey`, perm table) | ⚠️ **Per SDK build** | Proven across scenes within one tenant. Other tenants may ship a different build → verify per tenant. Guard: `npm run test:solver` |
+| Device token (`z_um.getToken()`) | ⚠️ **Per-tenant-ish** | `TokenFarm`: a tab on the target site's origin. `JsdomFarm`: jsdom + SDK assets + a `Log1` registration from Node |
+| Outbound proxy path (`proxy`) | ✅ **Global** — identical for every site | The "which status means blocked" choice belongs to the caller (`rotateOn`) |
 
-Yang **tidak** termasuk package ini: cara pemakaian param itu sendiri (header/body/
-apa pun milik aplikasi target). Itu di-reverse per situs, bukan generik.
+What this package does **not** include: how the param is consumed (header, body,
+or any other field owned by the target app). That is reversed per site, not
+generic.
 
-## Pacing & backoff
+## Pacing and backoff
 
-Nilai default di `CaptchaPool`, bisa di-override lewat `timing`:
+Defaults in `CaptchaPool`; override them through `timing`:
 
-| Konstanta | Default | Arti |
+| Constant | Default | Meaning |
 |---|---|---|
-| `PARAM_TTL_MS` | 75s | masa pakai param |
-| `MAX_PARAMS` | 2 | jumlah param warm. `0` = on-demand: Verify hanya jalan di dalam `get()`, tanpa mint di latar belakang |
-| `IDLE_PAUSE_MS` | 180s | tanpa `get()` selama ini, pool berhenti mint total, termasuk refill param yang masih hidup |
-| `MIN_GEN_INTERVAL_MS` | 10s | jarak minimum antar Verify |
-| `F001_PAUSE_MS` | 300s | cooldown risk-control |
-| `F011_PAUSE_MS` | 60s | cooldown frequency/desync |
-| `FAIL_BACKOFF_MS` | 35s | backoff verify gagal biasa. Tidak berlaku untuk kegagalan jalur proxy (`PROXY_TIMEOUT`, atau error dengan `proxyFailure`: CONNECT ditolak 407/429, proxy mati): router sudah pindah proxy, dan Aliyun tidak pernah memberi putusan |
-| `DEVICE_LOW` | 5 | stok device token di bawah ini memicu harvest di latar belakang, selama ada permintaan (`IDLE_PAUSE_MS`) dan farm tidak sedang menunggu restart |
-| `REFILL_RETRY_MS` | 30s | jeda antar harvest di latar belakang, berhasil atau tidak. Relaunch farm adalah rentetan koneksi proxy, jadi tidak boleh diulang tiap tick (harvest inline dalam `get()` tidak terpengaruh) |
+| `PARAM_TTL_MS` | 75s | param lifetime |
+| `MAX_PARAMS` | 2 | warm params kept. `0` = on-demand: Verify only runs inside `get()`, no background minting |
+| `IDLE_PAUSE_MS` | 180s | with no `get()` for this long, the pool stops minting entirely, including refills of still-live params |
+| `MIN_GEN_INTERVAL_MS` | 10s | minimum gap between Verifies |
+| `F001_PAUSE_MS` | 300s | risk-control cooldown |
+| `F011_PAUSE_MS` | 60s | frequency/desync cooldown |
+| `FAIL_BACKOFF_MS` | 35s | backoff after a generic Verify failure. Does not apply to proxy-path failures (`PROXY_TIMEOUT`, or an error carrying `proxyFailure`: refused CONNECT 407/429, dead proxy): the router has already moved on and Aliyun never returned a verdict |
+| `DEVICE_LOW` | 5 | below this many device tokens, a background harvest starts — while there is demand (`IDLE_PAUSE_MS`) and the farm is not waiting for a restart |
+| `REFILL_RETRY_MS` | 30s | gap between background harvests, successful or not. A farm relaunch is a burst of proxy connections, so it must not repeat every tick (an inline harvest inside `get()` is unaffected) |
 
-Harvest di latar belakang dan inline berbagi satu proses (single-flight). Harvest tidak
-memanggil Aliyun, jadi pacing dan backoff tidak berlaku untuknya.
+Background and inline harvests share one run (single-flight). Harvesting does not
+call Aliyun, so pacing and backoff do not apply to it.
 
-`F001` juga set `pool.farmNeedsRestart = true` — sinyal ke pemilik farm untuk
-bangun ulang tab (device context yang kena-flag, bukan sekadar pacing).
+`F001` also sets `pool.farmNeedsRestart = true` — a signal to the farm owner to
+rebuild the tab (the device context was flagged, this is not just pacing).
 
-`pool.setStaleCheck(() => farm.isStale())` memberi tahu pool kalau farm tertinggal dari
-proxy aktif. Saat itu refill latar belakang jalan walau stok masih penuh, jadi relaunch
-farm (sekitar 70 dtk dari dingin) terjadi di luar jalur request. Harvest tetap single-flight.
+`pool.setStaleCheck(() => farm.isStale())` tells the pool when the farm is behind
+the active proxy. Background refill then runs even with a full stock, so the farm
+relaunch (~70 s from cold) happens off the request path. Harvest remains
+single-flight.
 
-Verify tidak pernah berjalan bersamaan: hanya satu mint in-flight, baik dari
-background tick maupun dari `get()` (single-flight). Caller yang menemukan mint
-sedang jalan ikut menunggu hasilnya, tidak memulai Verify kedua.
+Verify never runs concurrently: at most one mint is in flight, whether started by
+the background tick or by `get()` (single-flight). A caller that finds a mint
+running waits for its result instead of starting a second Verify.
 
 ### Diagnosis: `pool.stats().lastError`
 
-Kegagalan mint terakhir: `code` (kode Aliyun seperti `F011`, atau `ERROR` untuk
-kegagalan lain), `message` (potongan respons Aliyun), `captchaType` (tantangan
-yang diterbitkan Init — `TRACELESS` = tanpa slider), dan `ageSec`. Field ini
-tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
+The last failed mint exposes `code` (an Aliyun code such as `F011`, or `ERROR` for
+other failures), `message` (a slice of the Aliyun response), `captchaType` (the
+challenge Init issued — `TRACELESS` means no slider), and `ageSec`. The field is
+kept after recovery, so `ageSec` shows how stale it is.
 
-## Test
+## Tests
 
 ```bash
-npm test                # 97 test: cipher & request shape (14), pool (24), proxy (32),
-                        #          chrome lintas-OS (7), farm lewat proxy (3), jsdom farm (17)
-npm run test:solver     # canary rotasi konstanta Aliyun
+npm test                # 97 tests: cipher & request shape (14), pool (24), proxy (32),
+                        #          cross-platform chrome (7), farm over proxy (3), jsdom farm (17)
+npm run test:solver     # canary for Aliyun constant rotation
 ```
 
-`test-farm-proxy.mjs` menjalankan Chrome sungguhan melawan dua proxy lokal yang
-menjawab 502. Tidak ada trafik keluar. Kalau Chrome tidak ditemukan, tes ini
-**melewati dirinya sendiri** (bukan gagal), jadi `npm test` tetap hijau di mesin
-tanpa Chrome; set `CHROME_PATH` untuk memaksanya jalan.
+`test-farm-proxy.mjs` drives a real Chrome against two local proxies that answer
+502. No traffic leaves the machine. When Chrome is not found the test **skips
+itself** (rather than failing), so `npm test` stays green on a machine without
+Chrome; set `CHROME_PATH` to force it.
 
-`test-jsdom-farm.mjs` jalan tanpa jsdom (logika aset, routing XHR, health gate,
-forwarding live, `isStale`) — satu tes warm-up penuh ikut jalan kalau `JSDOM_PATH`,
-`JSDOM_FARM_ASSETS`, dan `JSDOM_FARM_TEST_DEVICE_CONFIG` (file berisi blob
-`DeviceConfig`) di-set. Semua offline.
+`test-jsdom-farm.mjs` runs without jsdom (asset indexing, XHR routing, health gate,
+live forwarding, `isStale`) — one full warm-up test also runs when `JSDOM_PATH`,
+`JSDOM_FARM_ASSETS` and `JSDOM_FARM_TEST_DEVICE_CONFIG` (a file containing a
+`DeviceConfig` blob) are set. Everything is offline.
 
-`test-solver.mjs` yang paling penting: kalau konstanta cipher FeiLin berubah,
-test inilah yang gagal duluan — sebelum request apa pun ditolak diam-diam.
+`test-solver.mjs` is the most important one: if the FeiLin cipher constants
+change, this test fails first — before any request is silently rejected.
 
 ## CLI
 
 ```bash
-CHROME_PATH=/path/ke/chrome \
-PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json \
-  node src/token-farm.mjs --url https://site.tld --prefix abc123 --count 25
+CHROME_PATH=/path/to/chrome \
+PLAYWRIGHT_CORE_PATH=/path/to/playwright-core/package.json \
+  node src/token-farm.mjs --url https://target.example --prefix your-prefix --count 25
 
-JSDOM_PATH=/path/ke/jsdom JSDOM_FARM_ASSETS=/path/ke/aset-sdk \
-  node src/jsdom-farm.mjs --prefix abc123 --count 3      # tanpa Chrome
+JSDOM_PATH=/path/to/jsdom JSDOM_FARM_ASSETS=/path/to/sdk-assets \
+  node src/jsdom-farm.mjs --prefix your-prefix --count 3      # no Chrome
 ```
 
-## Asal-usul
+## Origin
 
-Diekstrak dari riset solver captcha chat.z.ai (`captcha-solver/` di repo
-`zai`, 2026-10-13). Port dari implementasi Go (GLM-Free-API) dan Python
-(glm-5.2-proxy). Bukti dan catatan investigasi ada di sana.
+Ported from earlier Go and Python implementations of the same protocol. The
+investigation notes are not part of this repository.

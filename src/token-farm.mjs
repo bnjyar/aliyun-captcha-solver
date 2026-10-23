@@ -85,7 +85,7 @@ export class TokenFarm {
   /**
    * @param {object} opts
    * @param {string}  opts.url          page to keep warm (needs a real origin for the SDK)
-   * @param {string}  opts.prefix       Aliyun tenant prefix, e.g. 'no8xfe'
+   * @param {string}  opts.prefix       Aliyun tenant prefix, e.g. 'abc123'
    * @param {string}  [opts.region]     SDK region token, e.g. 'sgp'
    * @param {string}  [opts.profile]    Chrome user-data-dir to persist
    * @param {string}  [opts.executablePath] Chrome/Chromium binary. Defaults to CHROME_PATH,

@@ -202,7 +202,7 @@ export function aliHash(inputStr, saltStr) {
  * @param {string} cfg.sceneId        SceneId for the target site (public value)
  * @param {string} [cfg.region]       SDK region token, e.g. 'sgp' (defaults to endpointRegion)
  * @param {string} [cfg.endpointRegion] DNS region token, e.g. 'southeast'
- * @param {string} [cfg.prefix]       Tenant prefix, e.g. 'no8xfe'
+ * @param {string} [cfg.prefix]       Tenant prefix, e.g. 'abc123'
  * @param {object} [cfg.constants]    Override cipher constants (last resort)
  * @param {number} [cfg.timeoutMs]    Per-HTTP-request timeout
  * @param {object} [cfg.proxy]        ProxyRouter from ./proxy.mjs. Init and Verify leave through its

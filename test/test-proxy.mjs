@@ -436,7 +436,7 @@ await t('abort from the caller does not count against the proxy', async () => {
 
 console.log('createAliyunCaptcha wiring');
 
-const aliyunCfg = { accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'no8xfe' };
+const aliyunCfg = { accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'abc123' };
 
 await t('with proxy: Init goes through proxy.fetch, not global fetch', async () => {
   const seen = [];

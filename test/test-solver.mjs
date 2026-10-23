@@ -42,7 +42,7 @@ const t = (name, fn) => {
 console.log('cipher primitives (vectors from the Go reference):');
 
 t('generateArg matches reference', () => {
-  // From /tmp/glmfree-check generateArg("test-certify-id-123")
+  // Vector produced by the Go reference for generateArg("test-certify-id-123")
   assert.equal(generateArg('test-certify-id-123'), 'bmJ4MnKBW5JkEHw4c1UHahtMQQ==');
 });
 
@@ -92,7 +92,7 @@ t('Timestamp is second-precision ISO-8601', async () => {
       accessKey: 'AK',
       secretKey: 'SK',
       sceneId: 'scene1',
-      prefix: 'no8xfe',
+      prefix: 'abc123',
     });
     await c.initCaptchaRaw();
   } finally {
@@ -112,7 +112,7 @@ t('initCaptcha stays a thin wrapper over initCaptchaRaw', async () => {
       accessKey: 'AK',
       secretKey: 'SK',
       sceneId: 'scene1',
-      prefix: 'no8xfe',
+      prefix: 'abc123',
     });
     assert.equal(await c.initCaptcha(), 'ABC123');
     assert.deepEqual(await c.initCaptchaRaw(), { CertifyId: 'ABC123' });
@@ -130,7 +130,7 @@ t('computeCaptchaParam returns the final param on success', async () => {
   globalThis.fetch = async () => ({ text: async () => replies.shift() });
   let param;
   try {
-    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'no8xfe' });
+    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'abc123' });
     param = await c.computeCaptchaParam('DEVTOKEN');
   } finally {
     globalThis.fetch = realFetch;
@@ -154,7 +154,7 @@ t('verify rejection carries the Init CaptchaType', async () => {
   globalThis.fetch = async () => ({ text: async () => replies.shift() });
   let err;
   try {
-    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'no8xfe' });
+    const c = createAliyunCaptcha({ accessKey: 'AK', secretKey: 'SK', sceneId: 'scene1', prefix: 'abc123' });
     await c.computeCaptchaParam('DEVTOKEN');
   } catch (e) {
     err = e;
@@ -173,11 +173,11 @@ t('client derives endpoints from prefix + region', () => {
     accessKey: 'AK',
     secretKey: 'SK',
     sceneId: 'scene1',
-    prefix: 'no8xfe',
+    prefix: 'abc123',
     region: 'southeast',
   });
-  assert.equal(c.initUrl, 'https://no8xfe.captcha-open-southeast.aliyuncs.com/');
-  assert.equal(c.verifyUrl, 'https://no8xfe-verify.captcha-open-southeast.aliyuncs.com/');
+  assert.equal(c.initUrl, 'https://abc123.captcha-open-southeast.aliyuncs.com/');
+  assert.equal(c.verifyUrl, 'https://abc123-verify.captcha-open-southeast.aliyuncs.com/');
 });
 
 t('SDK region token differs from DNS region token', () => {
@@ -214,10 +214,10 @@ t('cipher constants are untouched', () => {
 
 t('no tenant credentials are hardcoded', () => {
   // This package is platform-agnostic: every tenant value must come from
-  // config. If a Z.ai key ever creeps back in, this fails.
+  // config. If a tenant credential ever creeps back in, this fails.
   const src = fs.readFileSync(path.join(__dirname, '../src/aliyun-captcha.mjs'), 'utf8');
   assert.ok(!/LTAI[A-Za-z0-9]{16,}/.test(src), 'no hardcoded AccessKeyId');
-  assert.ok(!/didk33e0|11xygtvd/.test(src), 'no hardcoded Z.ai scene ids');
+  assert.ok(!/sceneId\s*[:=]\s*['"][^'"]+['"]/.test(src), 'no hardcoded scene id');
 });
 
 for (const [name, fn] of queue) {
