@@ -5,6 +5,12 @@
   "type": "module",
   "license": "MIT",
   "author": "aliyun-captcha-solver contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bnjyar/aliyun-captcha-solver.git"
+  },
+  "bugs": { "url": "https://github.com/bnjyar/aliyun-captcha-solver/issues" },
+  "homepage": "https://github.com/bnjyar/aliyun-captcha-solver#readme",
   "engines": { "node": ">=20.18.1" },
   "main": "./src/index.mjs",
   "types": "./src/index.d.ts",
