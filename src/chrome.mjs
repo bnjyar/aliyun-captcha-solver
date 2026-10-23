@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 const LINUX_CANDIDATES = [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/google-chrome',
+  '/opt/google/chrome/chrome',
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
   '/snap/bin/chromium',
@@ -68,7 +69,51 @@ export function resolveChromeExecutable(explicit = null) {
   return null;
 }
 
-/** Major version reported by `<chrome> --version`, or null. */
+/** Parse the highest version-named sibling directory (Windows Chrome layout). */
+export function versionFromVersionDirs(executablePath) {
+  if (!executablePath) return null;
+  try {
+    const dir = path.dirname(executablePath);
+    let best = null;
+    for (const name of fs.readdirSync(dir)) {
+      if (!/^\d+\.\d+\.\d+\.\d+$/.test(name)) continue;
+      if (!fs.statSync(path.join(dir, name)).isDirectory()) continue;
+      const parts = name.split('.').map(Number);
+      if (!best) {
+        best = parts;
+        continue;
+      }
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i] === best[i]) continue;
+        if (parts[i] > best[i]) best = parts;
+        break;
+      }
+    }
+    return best ? String(best[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read CFBundleShortVersionString from Chrome.app/Contents/Info.plist (macOS layout). */
+export function versionFromInfoPlist(executablePath) {
+  if (!executablePath) return null;
+  try {
+    // <...>/Google Chrome.app/Contents/MacOS/Google Chrome -> <...>/Contents/Info.plist
+    const plist = path.join(path.dirname(executablePath), '..', 'Info.plist');
+    const text = fs.readFileSync(plist, 'utf8');
+    const m = text.match(/<key>CFBundleShortVersionString<\/key>\s*<string>(\d+)\./);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Major version of the browser. `--version` works on Linux and macOS, but not
+ * reliably on Windows (chrome.exe is a GUI binary with no console), so fall back
+ * to the version-named directory next to the executable, then to Info.plist.
+ */
 export function chromeMajorVersion(executablePath) {
   if (process.env.CHROME_MAJOR_VERSION) return process.env.CHROME_MAJOR_VERSION;
   if (!executablePath) return null;
@@ -79,10 +124,11 @@ export function chromeMajorVersion(executablePath) {
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const m = String(out).match(/(\d+)\.\d+\.\d+/);
-    return m ? m[1] : null;
+    if (m) return m[1];
   } catch {
-    return null;
+    // GUI binaries on Windows, or an unreadable path: try the layout instead.
   }
+  return versionFromVersionDirs(executablePath) || versionFromInfoPlist(executablePath) || null;
 }
 
 /**

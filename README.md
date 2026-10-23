@@ -330,8 +330,8 @@ kept after recovery, so `ageSec` shows how stale it is.
 ## Tests
 
 ```bash
-npm test                # 97 tests: cipher & request shape (14), pool (24), proxy (32),
-                        #          cross-platform chrome (7), farm over proxy (3), jsdom farm (17)
+npm test                # 99 tests: cipher & request shape (14), pool (24), proxy (32),
+                        #           cross-platform chrome (9), farm over proxy (3), jsdom farm (17)
 npm run test:solver     # canary for Aliyun constant rotation
 ```
 

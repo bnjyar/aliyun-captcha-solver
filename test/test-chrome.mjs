@@ -3,11 +3,15 @@
 
 import assert from 'node:assert';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   chromeCandidates,
   resolveChromeExecutable,
   platformUserAgent,
   chromeMajorVersion,
+  versionFromVersionDirs,
+  versionFromInfoPlist,
 } from '../src/chrome.mjs';
 
 let passed = 0;
@@ -72,6 +76,41 @@ t('chromeMajorVersion honours CHROME_MAJOR_VERSION and tolerates a bad path', ()
   }
   assert.equal(chromeMajorVersion('/nope/chrome'), null);
   assert.equal(chromeMajorVersion(null), null);
+});
+
+t('Windows layout: highest version directory wins when --version is silent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-win-'));
+  try {
+    const app = path.join(root, 'Application');
+    fs.mkdirSync(path.join(app, '145.0.7632.46'), { recursive: true });
+    fs.mkdirSync(path.join(app, '99.0.1.2'), { recursive: true });
+    fs.mkdirSync(path.join(app, '146.0.1.2'), { recursive: true });
+    const exe = path.join(app, 'chrome.exe');
+    fs.writeFileSync(exe, ''); // not executable: --version cannot answer
+    assert.equal(versionFromVersionDirs(exe), '146');
+    assert.equal(chromeMajorVersion(exe), '146');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+t('macOS layout: CFBundleShortVersionString is read from Info.plist', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'chrome-mac-'));
+  try {
+    const contents = path.join(root, 'Google Chrome.app', 'Contents');
+    const macos = path.join(contents, 'MacOS');
+    fs.mkdirSync(macos, { recursive: true });
+    const exe = path.join(macos, 'Google Chrome');
+    fs.writeFileSync(exe, '');
+    fs.writeFileSync(
+      path.join(contents, 'Info.plist'),
+      '<plist><dict><key>CFBundleShortVersionString</key><string>152.0.7339.80</string></dict></plist>'
+    );
+    assert.equal(versionFromInfoPlist(exe), '152');
+    assert.equal(chromeMajorVersion(exe), '152');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n${passed} passed`);

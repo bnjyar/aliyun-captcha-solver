@@ -241,4 +241,6 @@ export function transportFailureReason(err: unknown): string | null;
 export function resolveChromeExecutable(explicit?: string | null): string | null;
 export function chromeCandidates(platform?: string): string[];
 export function chromeMajorVersion(executablePath: string | null): string | null;
+export function versionFromVersionDirs(executablePath: string | null): string | null;
+export function versionFromInfoPlist(executablePath: string | null): string | null;
 export function platformUserAgent(major?: string | null, platform?: string): string;
