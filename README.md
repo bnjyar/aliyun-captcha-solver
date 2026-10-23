@@ -20,6 +20,15 @@ Farm device token punya **dua engine** dengan kontrak yang sama (`start`/`harves
 | Chrome headless (default) | `TokenFarm` | playwright-core + profil Chrome | tab hangat; bukti live paling matang |
 | Node + jsdom (**tanpa Chrome**) | `JsdomFarm` | jsdom + aset SDK | SDK AliyunCaptcha.js **jalan di jsdom**, registrasi device (Log1) lewat jaringan dari Node; token lolos Verify live (T001) — lihat riset H13 di repo `zai` |
 
+## Batasan & penggunaan
+
+- Cakupan: **hanya Aliyun Captcha 2.0 (FeiLin) dengan challenge `TRACELESS`**. Bukan
+  reCAPTCHA/hCaptcha/Turnstile, bukan image grid, bukan slider.
+- Lisensi MIT (lihat `LICENSE`), tanpa jaminan apa pun.
+- Pakai hanya pada sistem yang lo punya izin untuk uji atau otomasi. Membuat param
+  captcha bisa melanggar ToS layanan target dan hukum setempat; tanggung jawab ada
+  di pemakai.
+
 ## Prinsip
 
 Risk engine Aliyun tidak memeriksa client saat verifikasi — trust terbentuk saat
@@ -45,6 +54,12 @@ npm install aliyun-captcha-solver
 opsional — Kalau sudah ada di app lo, resolve otomatis. Kalau tidak, set
 `PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json`.
 
+Chrome dicari otomatis: `CHROME_PATH` → lokasi umum di Linux, macOS, dan Windows
+(atau `opts.executablePath`). Tanpa semuanya, Playwright yang mencoba resolve.
+User agent diturunkan dari **versi Chrome yang benar-benar jalan** dan OS host,
+jadi UA tidak lagi bertentangan dengan fingerprint browser. `CHROME_MAJOR_VERSION`
+bisa dipakai untuk menimpa deteksi versi (berguna di container read-only).
+
 `jsdom` (>= 30) cuma dibutuhkan kalau lo pakai `JsdomFarm` — juga peer dependency
 opsional. Kalau tidak terpasang di app lo, set `JSDOM_PATH=/path/ke/jsdom`
 (direktori paket atau `package.json`-nya).
@@ -58,6 +73,8 @@ melakukannya lewat `postinstall`. Untuk tes solver, `playwright-core` dan `jsdom
 `devDependencies`, jadi `npm install` di sini cukup untuk menjalankan `npm test`.
 
 ## Pakai
+
+TypeScript: deklarasi tipe untuk entry root ikut terkirim (`src/index.d.ts`).
 
 ```js
 import { createAliyunCaptcha, CaptchaPool, TokenFarm } from 'aliyun-captcha-solver';
@@ -168,6 +185,26 @@ Catatan operasional:
   paket `canvas` nyata); token tetap diterima Verify live (bukti T001 di riset H13),
   tapi ini kandidat perbaikan kalau kelak muncul F001.
 
+## Tantangan non-traceless (slider)
+
+Solver ini hanya membangun param untuk challenge **TRACELESS** (tanpa slider):
+`TrackList` sengaja kosong. `InitCaptchaV3` mengembalikan `CaptchaType`; kalau
+server menerbitkan tipe lain, Verify akan menolak dan penyebabnya jadi kabur.
+
+`createAliyunCaptcha({ challengePolicy })` mengatur reaksinya:
+
+| Nilai | Perilaku |
+|---|---|
+| `'warn'` (default) | Catat satu baris log lalu lanjut. Tidak pernah memblokir mint. |
+| `'throw'` | Lempar `CHALLENGE_NOT_TRACELESS` sebelum Verify, menghemat satu panggilan ber-pacing. |
+
+Default `warn` karena daftar lengkap nilai `CaptchaType` lintas tenant belum
+dipetakan; memblokir berdasarkan tebakan bisa mematikan setup yang sebenarnya
+jalan. Kalau lo sudah melihat sendiri nilai yang keluar di tenant lo, nyalakan
+`'throw'`. Respons Init terakhir selalu ada di `captcha.lastInit` (termasuk
+`CaptchaType`), dan `pool.stats().lastError.captchaType` menyimpan yang terakhir
+gagal.
+
 ## Proxy keluar (opsional)
 
 Lo bisa kasih satu daftar proxy HTTP ke paket ini. Request yang dikirim paket, yaitu
@@ -273,13 +310,15 @@ tetap ada setelah pulih, jadi `ageSec` menunjukkan seberapa basi.
 ## Test
 
 ```bash
-npm test                # 86 test: cipher & request shape (14), pool (24), proxy (32),
-                        #          farm lewat proxy (3), jsdom farm (12)
+npm test                # 97 test: cipher & request shape (14), pool (24), proxy (32),
+                        #          chrome lintas-OS (7), farm lewat proxy (3), jsdom farm (17)
 npm run test:solver     # canary rotasi konstanta Aliyun
 ```
 
-`test-farm-proxy.mjs` menjalankan Chrome sungguhan (`/usr/bin/google-chrome-stable`)
-melawan dua proxy lokal yang menjawab 502. Tidak ada trafik keluar.
+`test-farm-proxy.mjs` menjalankan Chrome sungguhan melawan dua proxy lokal yang
+menjawab 502. Tidak ada trafik keluar. Kalau Chrome tidak ditemukan, tes ini
+**melewati dirinya sendiri** (bukan gagal), jadi `npm test` tetap hijau di mesin
+tanpa Chrome; set `CHROME_PATH` untuk memaksanya jalan.
 
 `test-jsdom-farm.mjs` jalan tanpa jsdom (logika aset, routing XHR, health gate,
 forwarding live, `isStale`) — satu tes warm-up penuh ikut jalan kalau `JSDOM_PATH`,
@@ -292,6 +331,7 @@ test inilah yang gagal duluan — sebelum request apa pun ditolak diam-diam.
 ## CLI
 
 ```bash
+CHROME_PATH=/path/ke/chrome \
 PLAYWRIGHT_CORE_PATH=/path/ke/playwright-core/package.json \
   node src/token-farm.mjs --url https://site.tld --prefix abc123 --count 25
 

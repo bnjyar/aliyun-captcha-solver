@@ -207,6 +207,10 @@ export function aliHash(inputStr, saltStr) {
  * @param {number} [cfg.timeoutMs]    Per-HTTP-request timeout
  * @param {object} [cfg.proxy]        ProxyRouter from ./proxy.mjs. Init and Verify leave through its
  *                                    active proxy. Without it, global fetch is used.
+ * @param {'warn'|'throw'} [cfg.challengePolicy='warn']
+ *                                    Init reports the challenge it issued (CaptchaType). This solver
+ *                                    only speaks the traceless one (no slider). 'warn' logs and
+ *                                    continues; 'throw' fails fast before spending a Verify.
  */
 export function createAliyunCaptcha(cfg) {
   const {
@@ -219,6 +223,7 @@ export function createAliyunCaptcha(cfg) {
     constants = {},
     timeoutMs = 15000,
     proxy = null,
+    challengePolicy = 'warn',
     log = null, // optional (msg) => void: per-mint timing (init vs verify)
   } = cfg || {};
 
@@ -226,6 +231,11 @@ export function createAliyunCaptcha(cfg) {
   if (!secretKey) throw new Error('createAliyunCaptcha: secretKey is required');
   if (!sceneId) throw new Error('createAliyunCaptcha: sceneId is required');
   if (!prefix) throw new Error('createAliyunCaptcha: prefix is required');
+  if (challengePolicy !== 'warn' && challengePolicy !== 'throw') {
+    throw new Error(`createAliyunCaptcha: challengePolicy must be 'warn' or 'throw' (got ${challengePolicy})`);
+  }
+
+  let lastInit = null; // most recent Init response, for diagnostics
 
   const argConstant = constants.argConstant || ARG_CONSTANT;
   const encryptKey = constants.encryptKey || ENCRYPT_KEY;
@@ -260,6 +270,7 @@ export function createAliyunCaptcha(cfg) {
     if (!data.CertifyId) {
       throw new Error(`InitCaptchaV3 failed: ${resp.slice(0, 400)}`);
     }
+    lastInit = data;
     return data;
   }
 
@@ -321,6 +332,20 @@ export function createAliyunCaptcha(cfg) {
     const init = await initCaptchaRaw();
     const tInit = Date.now();
     const certifyId = init.CertifyId;
+
+    // The solver only constructs the traceless (no-slider) param. If Init says
+    // otherwise, say so once here instead of letting Verify answer with a code
+    // that hides the cause. Default is warn: we do not have a complete list of
+    // CaptchaType values across tenants, so blocking on it would be guesswork.
+    const challenge = init.CaptchaType || null;
+    if (challenge && challenge !== 'TRACELESS') {
+      const msg = `InitCaptchaV3 issued a ${challenge} challenge (not TRACELESS); the traceless param may be rejected`;
+      log?.(msg);
+      if (challengePolicy === 'throw') {
+        throw Object.assign(new Error(msg), { code: 'CHALLENGE_NOT_TRACELESS', captchaType: challenge });
+      }
+    }
+
     const argValue = arg(certifyId);
     const ct = Date.now();
 
@@ -374,5 +399,9 @@ export function createAliyunCaptcha(cfg) {
     initCaptchaRaw,
     verifyCaptcha,
     computeCaptchaParam,
+    // Most recent raw Init response (CertifyId, CaptchaType, ...), null before the first call.
+    get lastInit() {
+      return lastInit;
+    },
   };
 }

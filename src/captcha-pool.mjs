@@ -21,6 +21,7 @@ const IDLE_PAUSE_MS = 180_000; // park generation when no demand
 const DEVICE_TOKEN_TTL_MS = 240_000; // device token freshness window
 const DEVICE_LOW = 5; // refill in the background when fewer tokens are left
 const REFILL_RETRY_MS = 30_000; // a harvest that returned nothing waits this long before the next one
+const MAX_CONSUMED = 5000; // remembered one-time tokens; bounded so a long process cannot leak
 
 export class CaptchaPool {
   /**
@@ -35,7 +36,7 @@ export class CaptchaPool {
       throw new Error('CaptchaPool requires a captcha client with computeCaptchaParam()');
     }
     this.captcha = captcha;
-    this.t = { ...{ PARAM_TTL_MS, MAX_PARAMS, MIN_GEN_INTERVAL_MS, F001_PAUSE_MS, F011_PAUSE_MS, FAIL_BACKOFF_MS, IDLE_PAUSE_MS, DEVICE_TOKEN_TTL_MS, DEVICE_LOW, REFILL_RETRY_MS }, ...timing };
+    this.t = { ...{ PARAM_TTL_MS, MAX_PARAMS, MIN_GEN_INTERVAL_MS, F001_PAUSE_MS, F011_PAUSE_MS, FAIL_BACKOFF_MS, IDLE_PAUSE_MS, DEVICE_TOKEN_TTL_MS, DEVICE_LOW, REFILL_RETRY_MS, MAX_CONSUMED }, ...timing };
 
     this.params = []; // { createdAt, value }
     this.deviceTokens = deviceTokens.map((t) => ({ addedAt: Date.now(), token: t }));
@@ -96,6 +97,12 @@ export class CaptchaPool {
     // during a backoff, and the backoff exists for Aliyun's verdict, not for the
     // harvest. The inline refill never ran during a backoff anyway (mayMint gates it).
     if (added) this.log(`+${added} device tokens (pool ${this.deviceTokens.length})`);
+    // One-time tokens are never re-added; remembering every token forever leaks
+    // memory in a process that runs for days. A bounded FIFO is enough.
+    while (this.consumed.size > this.t.MAX_CONSUMED) {
+      const oldest = this.consumed.values().next().value;
+      this.consumed.delete(oldest);
+    }
     return added;
   }
 

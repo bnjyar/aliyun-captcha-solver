@@ -15,11 +15,10 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { chromeProxyFailureReason } from './proxy.mjs';
+import { resolveChromeExecutable, chromeMajorVersion, platformUserAgent } from './chrome.mjs';
 
 const require = createRequire(import.meta.url);
 
-const UA =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const SDK_URL = 'https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -34,6 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * `.chromium` on it.
  */
 function chromiumFrom(candidate) {
+  const isPath = path.isAbsolute(candidate) || /[\\/]/.test(candidate);
   let mod = require(candidate);
   for (let hop = 0; hop < 3; hop++) {
     if (!mod || typeof mod !== 'object') break;
@@ -44,9 +44,7 @@ function chromiumFrom(candidate) {
       continue;
     }
     if (typeof mod.main === 'string') {
-      const dir = candidate.startsWith('/') || candidate.includes('/')
-        ? path.dirname(path.resolve(candidate))
-        : null;
+      const dir = isPath ? path.dirname(path.resolve(candidate)) : null;
       if (!dir) break;
       mod = require(path.join(dir, mod.main));
       continue;
@@ -55,9 +53,7 @@ function chromiumFrom(candidate) {
     // `exports` map. Follow its CJS/ESM entry by hand.
     const entry = mod.exports && typeof mod.exports === 'object' && mod.exports['.'];
     if (entry) {
-      const dir = candidate.startsWith('/') || candidate.includes('/')
-        ? path.dirname(path.resolve(candidate))
-        : null;
+      const dir = isPath ? path.dirname(path.resolve(candidate)) : null;
       if (!dir) break;
       const rel = typeof entry === 'string' ? entry : entry.require || entry.default || entry.import;
       mod = require(path.join(dir, rel));
@@ -92,7 +88,13 @@ export class TokenFarm {
    * @param {string}  opts.prefix       Aliyun tenant prefix, e.g. 'no8xfe'
    * @param {string}  [opts.region]     SDK region token, e.g. 'sgp'
    * @param {string}  [opts.profile]    Chrome user-data-dir to persist
-   * @param {string}  [opts.executablePath]
+   * @param {string}  [opts.executablePath] Chrome/Chromium binary. Defaults to CHROME_PATH,
+   *                                     then the platform's well-known locations (Linux, macOS,
+   *                                     Windows); null lets Playwright resolve it.
+   * @param {string}  [opts.userAgent]   override; by default derived from the browser version
+   *                                     and the host platform so the UA matches the fingerprint
+   * @param {number}  [opts.minTokenLen] reject tokens shorter than this (default 500): the SDK
+   *                                     can install a silent stub when registration failed
    * @param {string}  [opts.waitSelector]  optional: site is "ready" when this selector exists
    * @param {string}  [opts.warmMessage]    optional: fallback warm-up via a real UI message
    * @param {string}  [opts.inputSelector]   defaults to opts.waitSelector
@@ -107,7 +109,9 @@ export class TokenFarm {
     prefix,
     region = 'sgp',
     profile = null,
-    executablePath = '/usr/bin/google-chrome-stable',
+    executablePath = null,
+    userAgent = null,
+    minTokenLen = 500,
     waitSelector = null,
     warmMessage = null,
     inputSelector = null,
@@ -122,6 +126,8 @@ export class TokenFarm {
     this.region = region;
     this.profile = profile;
     this.executablePath = executablePath;
+    this.userAgent = userAgent;
+    this.minTokenLen = minTokenLen;
     this.waitSelector = waitSelector;
     this.warmMessage = warmMessage;
     this.inputSelector = inputSelector || waitSelector;
@@ -129,6 +135,7 @@ export class TokenFarm {
     this.headless = headless;
     this.proxy = proxy;
     this.launchedProxy = null; // router entry the running Chrome was launched with
+    this.browser = null; // ephemeral mode only: the Browser we created the context from
     this.context = null;
     this.page = null;
     this.warmed = false;
@@ -159,24 +166,48 @@ export class TokenFarm {
 
   async launch() {
     const chromium = loadChromium();
-    this.log('launching chrome:', this.profile || '(ephemeral)');
+    const executablePath = resolveChromeExecutable(this.executablePath);
+    const major = chromeMajorVersion(executablePath);
+    const userAgent = this.userAgent || platformUserAgent(major);
+    this.log(
+      'launching chrome:',
+      this.profile || '(ephemeral)',
+      executablePath || '(playwright default)',
+      `ua Chrome/${major || '?'}`
+    );
     const launchOpts = {
       headless: this.headless,
-      executablePath: this.executablePath,
-      viewport: { width: 1280, height: 800 },
-      userAgent: UA,
-      locale: 'en-US',
       args: ['--disable-blink-features=AutomationControlled', '--disable-dev-shm-usage', '--no-sandbox'],
     };
+    if (executablePath) launchOpts.executablePath = executablePath;
     if (this.proxy) {
       // Chrome cannot switch proxies on a live context, so the choice is made here.
       this.launchedProxy = this.proxy.current();
       launchOpts.proxy = this.launchedProxy.playwrightProxy;
       this.log(`chrome egress via proxy #${this.launchedProxy.index}`);
     }
-    this.context = this.profile
-      ? await chromium.launchPersistentContext(this.profile, launchOpts)
-      : await chromium.launch(launchOpts);
+
+    // viewport/userAgent/locale are CONTEXT options: launchPersistentContext takes
+    // them directly, while chromium.launch() rejects them and returns a Browser
+    // (not a context). Normalize both modes to "one context".
+    const contextOpts = { viewport: { width: 1280, height: 800 }, userAgent, locale: 'en-US' };
+    try {
+      if (this.profile) {
+        this.context = await chromium.launchPersistentContext(this.profile, { ...launchOpts, ...contextOpts });
+        this.browser = null;
+      } else {
+        this.browser = await chromium.launch(launchOpts);
+        this.context = await this.browser.newContext(contextOpts);
+      }
+    } catch (e) {
+      if (!executablePath) {
+        throw Object.assign(new Error(`Chrome not found (set CHROME_PATH or opts.executablePath). ${e.message}`), {
+          cause: e,
+        });
+      }
+      throw e;
+    }
+    this.launchedUserAgent = userAgent;
     this.page = this.context.pages()[0] || (await this.context.newPage());
     await this.warm();
   }
@@ -267,6 +298,21 @@ export class TokenFarm {
     // Let the SDK finish its own invisible verify cycle before harvesting,
     // so we never grab a token that the SDK itself is about to consume.
     await sleep(8000);
+    // A failed registration can leave a stub that returns short/empty strings
+    // without throwing. Surface it here instead of harvesting zero tokens later.
+    const probe = await this.page.evaluate(() => {
+      try {
+        const t = window.z_um.getToken();
+        return typeof t === 'string' ? t : '';
+      } catch {
+        return '';
+      }
+    });
+    if (probe.length < this.minTokenLen) {
+      this.log(
+        `warn: probe token ${probe.length} chars < minTokenLen ${this.minTokenLen} (registration may have failed)`
+      );
+    }
     this.warmed = true;
     mark('ready');
     this.log('warm; z_um ready');
@@ -306,7 +352,9 @@ export class TokenFarm {
             return null;
           }
         });
-        if (t) out.push(t);
+        // Same health gate as JsdomFarm: a stub or a truncated token is not a token.
+        if (t && t.length >= this.minTokenLen) out.push(t);
+        else if (t) this.log(`dropped short token (${t.length} chars)`);
       } catch {
         break; // page dead / navigated
       }
@@ -319,8 +367,8 @@ export class TokenFarm {
   async ensureFresh() {
     // Re-warm if the tab crashed or navigated away.
     if (!this.page || this.page.isClosed()) {
-      this.context = null;
       this.warmed = false;
+      await this.stop();
       await this.start();
       return;
     }
@@ -361,6 +409,14 @@ export class TokenFarm {
       this.page = null;
       this.warmed = false;
       this.log('stopped');
+    }
+    // Ephemeral mode: the context came from this browser; close it too so the
+    // process does not linger after stop()/restart().
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch {}
+      this.browser = null;
     }
   }
 }

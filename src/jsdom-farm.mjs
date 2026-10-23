@@ -45,7 +45,7 @@ export function resolveJsdom() {
   const errors = [];
   for (const c of candidates) {
     try {
-      const isPath = c.includes('/') || c.startsWith('.');
+      const isPath = path.isAbsolute(c) || /[\\/]/.test(c) || c.startsWith('.');
       const target = isPath ? (path.basename(c) === 'package.json' ? path.dirname(path.resolve(c)) : path.resolve(c)) : c;
       const mod = require(target);
       const picked = mod && mod.JSDOM ? mod : mod?.default?.JSDOM ? mod.default : null;

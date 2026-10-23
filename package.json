@@ -4,23 +4,30 @@
   "description": "Browserless Aliyun Captcha 2.0 param generator (FeiLin). Platform-agnostic; one device-token farm per site.",
   "type": "module",
   "license": "MIT",
+  "author": "aliyun-captcha-solver contributors",
   "engines": { "node": ">=20.18.1" },
   "main": "./src/index.mjs",
+  "types": "./src/index.d.ts",
   "exports": {
-    ".": "./src/index.mjs",
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    },
     "./aliyun-captcha": "./src/aliyun-captcha.mjs",
     "./captcha-pool": "./src/captcha-pool.mjs",
     "./token-farm": "./src/token-farm.mjs",
     "./jsdom-farm": "./src/jsdom-farm.mjs",
+    "./chrome": "./src/chrome.mjs",
     "./proxy": "./src/proxy.mjs",
     "./package.json": "./package.json"
   },
   "files": ["src", "README.md"],
   "scripts": {
-    "test": "node test/test-solver.mjs && node test/test-pool.mjs && node test/test-proxy.mjs && node test/test-farm-proxy.mjs && node test/test-jsdom-farm.mjs",
+    "test": "node test/test-solver.mjs && node test/test-pool.mjs && node test/test-proxy.mjs && node test/test-chrome.mjs && node test/test-farm-proxy.mjs && node test/test-jsdom-farm.mjs",
     "test:solver": "node test/test-solver.mjs",
     "test:pool": "node test/test-pool.mjs",
     "test:proxy": "node test/test-proxy.mjs",
+    "test:chrome": "node test/test-chrome.mjs",
     "test:farm-proxy": "node test/test-farm-proxy.mjs",
     "test:jsdom-farm": "node test/test-jsdom-farm.mjs"
   },
@@ -32,7 +39,7 @@
     "playwright-core": { "optional": true },
     "jsdom": { "optional": true }
   },
-  "keywords": ["aliyun", "captcha", "feilin", "captcha-open", "anti-bot"],
+  "keywords": ["aliyun", "captcha", "feilin", "captcha-open", "captcha-verify-param", "cloudauth", "anti-bot"],
   "sideEffects": false,
   "dependencies": {
     "undici": "^7.30.0"

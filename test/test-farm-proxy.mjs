@@ -1,7 +1,8 @@
 // test-farm-proxy.mjs — the farm's Chrome leaves through the proxy router, and
-// proxy-level failures move it on. Real Chrome (executablePath default) against
-// local proxies only; nothing reaches the internet.
-// Run: node test/test-farm-proxy.mjs   (needs /usr/bin/google-chrome-stable)
+// proxy-level failures move it on. Real Chrome against local proxies only;
+// nothing reaches the internet.
+// Run: node test/test-farm-proxy.mjs   (needs Chrome; set CHROME_PATH if it is
+// not in a well-known location — the test skips itself when none is found)
 
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -10,7 +11,15 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TokenFarm } from '../src/token-farm.mjs';
+import { resolveChromeExecutable } from '../src/chrome.mjs';
 import { ProxyRouter, parseProxyLine } from '../src/proxy.mjs';
+
+const chrome = resolveChromeExecutable();
+if (!chrome) {
+  console.log('farm egress through the proxy router');
+  console.log('  · skipped: Chrome not found (set CHROME_PATH or install Chrome)');
+  process.exit(0);
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const profile = path.join(here, '.tmp-farm-profile');
@@ -103,6 +112,7 @@ const farm = new TokenFarm({
   url: 'http://farm-test.invalid/', // never resolved: requests go to the proxy
   prefix: 'no8xfe',
   profile,
+  executablePath: chrome,
   proxy: router,
 });
 
